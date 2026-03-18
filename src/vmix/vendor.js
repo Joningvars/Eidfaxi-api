@@ -17,7 +17,8 @@ export async function fetchCurrentRider(eventId, classId, competitionId) {
       const rankB = Number(b.saeti || b.fmt_saeti) || 999;
       return rankA - rankB;
     });
-    return sorted[0];
+    const enriched = await enrichEntriesWithTeam([sorted[0]], eventId);
+    return enriched[0] || sorted[0];
   }
 
   return {};

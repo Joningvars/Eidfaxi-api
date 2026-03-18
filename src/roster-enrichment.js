@@ -230,6 +230,8 @@ export async function enrichEntriesWithTeam(entries, eventId) {
     return {
       ...entry,
       lid: teamName,
+      Lid: teamName,
+      team_name: teamName,
     };
   });
 }
