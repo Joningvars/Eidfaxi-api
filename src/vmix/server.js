@@ -465,7 +465,7 @@ function renderControlHtml() {
     }
     async function loadEventOptions() {
       const year = new Date().getFullYear();
-      const r = await fetch('/events/search?ar=' + year + '&land=IS&innanhusmot=1');
+      const r = await fetch('/events/search?ar=' + year + '&land=IS');
       const data = await r.json();
       const events = Array.isArray(data?.tournaments)
         ? data.tournaments
