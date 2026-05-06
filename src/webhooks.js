@@ -7,6 +7,7 @@ import {
 } from './config.js';
 import { apiGetWithRetry } from './sportfengur.js';
 import { scheduleRefresh, setCompetitionContext } from './vmix/refresh.js';
+import { getCompetitionMetadata } from './vmix/state.js';
 import { clearStartingListCache } from './vmix/vendor.js';
 import { log } from './logger.js';
 import { requireControlSession } from './control-auth.js';
@@ -105,6 +106,20 @@ function isAllowedEventId(payload) {
   return Number(payload.eventId) === eventIdFilter;
 }
 
+function isAllowedClassId(payload) {
+  const { classId: currentClassId } = getCompetitionMetadata();
+  // Fresh startup — no class selected yet, allow all webhooks through
+  if (currentClassId == null) {
+    return true;
+  }
+  // Event has no classId in payload (e.g., event_keppendalisti_breyta) — allow through
+  if (payload.classId == null) {
+    return true;
+  }
+  // Only allow if classId matches the currently active class
+  return Number(payload.classId) === Number(currentClassId);
+}
+
 async function resolveCompetitionId(payload) {
   if (payload.competitionId != null) {
     competitionIdByClassId.set(payload.classId, payload.competitionId);
@@ -183,6 +198,20 @@ async function handleWebhook(req, res, eventName) {
         eventId: payload.eventId ?? null,
         classId: payload.classId ?? null,
         competitionId: payload.competitionId ?? null,
+      });
+      return;
+    }
+
+    if (!isAllowedClassId(payload)) {
+      const { classId: currentClassId } = getCompetitionMetadata();
+      log.webhook.filtered(payload.classId ?? 'N/A', currentClassId);
+      pushWebhookHistory({
+        status: 'classId_filtered',
+        eventName,
+        eventId: payload.eventId ?? null,
+        classId: payload.classId ?? null,
+        competitionId: payload.competitionId ?? null,
+        currentClassId: currentClassId ?? null,
       });
       return;
     }
@@ -299,7 +328,9 @@ export function registerConfigRoutes(app) {
   app.post('/config/event-filter', (req, res) => {
     if (!requireControlSession(req, res, true)) return;
     const value =
-      req.body?.eventIdFilter === undefined ? req.body?.eventId : req.body?.eventIdFilter;
+      req.body?.eventIdFilter === undefined
+        ? req.body?.eventId
+        : req.body?.eventIdFilter;
 
     if (value === undefined) {
       return res.status(400).json({
