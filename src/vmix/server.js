@@ -132,12 +132,15 @@ function extractGangtegundResults(currentState, sort = 'start') {
 }
 
 function sortLeaderboard(entries, sort) {
-  const mode =
-    sort === 'rank' ? 'rank' : sort === 'teams' ? 'teams' : 'start';
+  const mode = sort === 'rank' ? 'rank' : sort === 'teams' ? 'teams' : 'start';
   return [...entries].sort((a, b) => {
     if (mode === 'teams') {
-      const teamA = String(a?.Lid || '').trim().toLowerCase();
-      const teamB = String(b?.Lid || '').trim().toLowerCase();
+      const teamA = String(a?.Lid || '')
+        .trim()
+        .toLowerCase();
+      const teamB = String(b?.Lid || '')
+        .trim()
+        .toLowerCase();
       if (teamA !== teamB) {
         if (!teamA) return 1;
         if (!teamB) return -1;
@@ -162,7 +165,9 @@ function sortLeaderboard(entries, sort) {
 }
 
 function filterLeaderboardBySearch(entries, search) {
-  const term = String(search || '').trim().toLowerCase();
+  const term = String(search || '')
+    .trim()
+    .toLowerCase();
   if (!term) return [...entries];
 
   return entries.filter((entry) => {
@@ -319,6 +324,19 @@ function renderControlHtml() {
     <div class="card">
       <h2>Handvirk uppfærsla</h2>
       <div id="filterStatus" class="status">Motasía: hleð...</div>
+      <label>Land</label>
+      <select id="countrySelect">
+        <option value="IS" selected>Ísland</option>
+        <option value="SE">Svíþjóð</option>
+        <option value="DK">Danmörk</option>
+        <option value="NO">Noregur</option>
+        <option value="FI">Finnland</option>
+        <option value="DE">Þýskaland</option>
+        <option value="NL">Holland</option>
+        <option value="GB">Bretland</option>
+        <option value="US">Bandaríkin</option>
+        <option value="">Öll lönd</option>
+      </select>
       <label>Veldu mot</label>
       <select id="eventSelect">
         <option value="">Hleð motum...</option>
@@ -359,6 +377,7 @@ function renderControlHtml() {
     const classIdState = document.getElementById('classIdState');
     const endpointButtons = document.getElementById('endpointButtons');
     const eventSelect = document.getElementById('eventSelect');
+    const countrySelect = document.getElementById('countrySelect');
     const classIdSelect = document.getElementById('classIdSelect');
     const classIdInput = document.getElementById('classIdInput');
     const card = document.querySelector('.card');
@@ -418,7 +437,7 @@ function renderControlHtml() {
       buttons.push({ label: 'event/current', path: '/event/current', needsEvent: false });
       buttons.push({ label: 'event/leaderboards.zip', path: '/event/leaderboards.zip', needsEvent: false });
       buttons.push({ label: 'event/csv.zip', path: '/event/csv.zip', needsEvent: false });
-      buttons.push({ label: 'events/search (ár)', path: '/events/search?ar=' + new Date().getFullYear() + '&land=IS&innanhusmot=1', needsEvent: false });
+      buttons.push({ label: 'events/search (ár)', path: '/events/search?ar=' + new Date().getFullYear() + '&land=' + (countrySelect.value || ''), needsEvent: false });
 
       endpointButtons.innerHTML = '';
       for (let i = 0; i < buttons.length; i += 2) {
@@ -465,7 +484,9 @@ function renderControlHtml() {
     }
     async function loadEventOptions() {
       const year = new Date().getFullYear();
-      const r = await fetch('/events/search?ar=' + year + '&land=IS');
+      const country = countrySelect.value;
+      const params = 'ar=' + year + (country ? '&land=' + country : '');
+      const r = await fetch('/events/search?' + params);
       const data = await r.json();
       const events = Array.isArray(data?.tournaments)
         ? data.tournaments
@@ -812,6 +833,9 @@ function renderControlHtml() {
         renderClassIdState();
         syncRefreshButtons();
       });
+    });
+    countrySelect.addEventListener('change', () => {
+      loadEventOptions().catch((e) => show(String(e), false));
     });
     classIdInput.addEventListener('input', syncRefreshButtons);
     classIdSelect.addEventListener('change', syncRefreshButtons);
