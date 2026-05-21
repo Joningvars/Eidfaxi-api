@@ -105,6 +105,24 @@ export function updateEventState(eventId, competitionId, leaderboard, classId) {
 }
 
 /**
+ * Set the classId for a specific competition slot without overwriting leaderboard data.
+ *
+ * @param {number} eventId
+ * @param {number} competitionId
+ * @param {number} classId
+ */
+export function setEventClassId(eventId, competitionId, classId) {
+  const id = Number(eventId);
+  if (!eventStates.has(id)) {
+    eventStates.set(id, createEmptyEventState());
+  }
+  const state = eventStates.get(id);
+  if (state.competitions[competitionId]) {
+    state.competitions[competitionId].classId = classId;
+  }
+}
+
+/**
  * Get metadata for all events in the state store.
  *
  * @returns {Array<{ eventId: number, competitions: object }>}

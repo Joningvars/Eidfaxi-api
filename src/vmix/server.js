@@ -6,6 +6,7 @@ import {
   getLeaderboardForEvent,
   getEventState,
   getAllEventsMetadata,
+  setEventClassId,
 } from './state.js';
 import { leaderboardToCsv } from './normalizer.js';
 import { apiGetWithRetry } from '../sportfengur.js';
@@ -921,6 +922,30 @@ function renderControlHtml() {
 </html>`;
 }
 
+/**
+ * Fetch classIds from Sportfengur for an event and store them in the state.
+ * This is called automatically when an event is registered.
+ */
+async function resolveClassIdsForEvent(eventId) {
+  const data = await apiGetWithRetry(
+    `/${SPORTFENGUR_LOCALE}/event/tests/${eventId}`,
+  );
+  const tests = Array.isArray(data?.res) ? data.res : [];
+  for (const test of tests) {
+    const competitionId = Number.parseInt(String(test?.keppni_numer), 10);
+    const classId = Number.parseInt(String(test?.flokkar_numer), 10);
+    if (
+      Number.isInteger(competitionId) &&
+      competitionId >= 1 &&
+      competitionId <= 3 &&
+      Number.isInteger(classId) &&
+      classId > 0
+    ) {
+      setEventClassId(eventId, competitionId, classId);
+    }
+  }
+}
+
 export function registerVmixRoutes(app) {
   app.get('/control', (req, res) => {
     if (!requireControlSession(req, res, false)) return;
@@ -955,12 +980,21 @@ export function registerVmixRoutes(app) {
 
   // --- Event Management API Routes ---
 
-  app.post('/events/register', (req, res) => {
+  app.post('/events/register', async (req, res) => {
     if (!requireControlSession(req, res, true)) return;
     const eventId = req.body?.eventId;
     const name = req.body?.name || '';
     try {
       const entry = registerEvent(eventId, name);
+
+      // Auto-resolve classIds from Sportfengur in the background
+      resolveClassIdsForEvent(entry.eventId).catch((err) => {
+        console.error(
+          `[Event Registry] Failed to resolve classIds for event ${entry.eventId}:`,
+          err.message,
+        );
+      });
+
       res.setHeader('Content-Type', 'application/json');
       res.json({ ok: true, event: entry });
     } catch (error) {
