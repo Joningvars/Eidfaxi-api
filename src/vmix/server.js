@@ -687,11 +687,10 @@ function renderControlHtml() {
       // Render tab buttons
       tabBar.innerHTML = activeEvents.map((ev, idx) => {
         const slot = idx + 1;
-        const displayLabel = ev.label || ev.name || String(ev.eventId);
-        const tabLabel = 'Slot ' + slot + ': ' + displayLabel;
+        const displayLabel = ev.label || ev.name || ('Slot ' + slot);
         const isActive = ev.eventId === activeTabId;
         return '<button class="tab-btn' + (isActive ? ' active' : '') + '" data-event-id="' + ev.eventId + '" onclick="selectTab(' + ev.eventId + ')">'
-          + tabLabel
+          + displayLabel
           + '<span class="tab-close" onclick="event.stopPropagation(); removeEvent(' + ev.eventId + ')" title="Fjarlægja mót">&times;</span>'
           + '</button>';
       }).join('');
@@ -736,12 +735,12 @@ function renderControlHtml() {
 
     function createTabPanelHtml(ev, slotNum) {
       const eventId = ev.eventId;
-      const displayName = ev.name ? ev.name + ' (' + eventId + ')' : String(eventId);
+      const displayName = ev.label || ev.name || ('Slot ' + slotNum);
       const currentLabel = ev.label || '';
       return '<div class="tab-panel">'
         + '<div class="grid">'
         + '<div>'
-        + '<h2>Slot ' + slotNum + ': ' + displayName + '</h2>'
+        + '<h2>' + displayName + '</h2>'
         + '<div style="display:flex;gap:8px;align-items:end;margin-bottom:10px">'
         + '<div style="flex:1"><label>Nafn á slot (t.d. bílnúmer)</label>'
         + '<input id="labelInput-' + eventId + '" type="text" placeholder="T.d. Bíll 1" value="' + currentLabel + '" /></div>'
@@ -760,7 +759,7 @@ function renderControlHtml() {
         + '</div>'
         + '<div>'
         + '<div class="card" style="margin:0">'
-        + '<h2>Flýtileiðir — Slot ' + slotNum + '</h2>'
+        + '<h2>Flýtileiðir</h2>'
         + '<p class="muted" style="margin-top:0">Sort: bættu við <code>?sort=start</code> eða <code>?sort=rank</code>.</p>'
         + '<div id="endpointButtons-' + eventId + '" class="endpoint-grid"></div>'
         + '</div>'
