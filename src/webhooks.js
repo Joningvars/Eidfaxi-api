@@ -112,6 +112,10 @@ function isAllowedEventId(payload) {
 }
 
 function isAllowedClassId(payload) {
+  // In multi-event mode, don't filter by classId — the eventId filter is sufficient
+  if (getEventCount() > 1) {
+    return true;
+  }
   const { classId: currentClassId } = getCompetitionMetadata();
   // Fresh startup — no class selected yet, allow all webhooks through
   if (currentClassId == null) {
