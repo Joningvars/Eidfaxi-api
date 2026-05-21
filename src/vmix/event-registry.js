@@ -125,6 +125,45 @@ export function getDefaultEventId() {
 }
 
 /**
+ * Resolve an eventId from either a real eventId or a slot number (1-10).
+ * Slot numbers are assigned by registration order.
+ *
+ * @param {number} idOrSlot - Either a real eventId (large number) or slot number (1-10)
+ * @returns {number|null} The resolved eventId, or null if not found
+ */
+export function resolveEventId(idOrSlot) {
+  const parsed = Number(idOrSlot);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+
+  // If it's a real eventId in the registry, return it directly
+  if (activeEvents.has(parsed)) {
+    return parsed;
+  }
+
+  // If it's a slot number (1-10), resolve by position
+  if (parsed >= 1 && parsed <= MAX_ACTIVE_EVENTS) {
+    const events = Array.from(activeEvents.values());
+    if (parsed <= events.length) {
+      return events[parsed - 1].eventId;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Get all active events with their slot numbers.
+ *
+ * @returns {Array<{ eventId: number, slot: number, addedAt: string, name: string }>}
+ */
+export function getActiveEventsWithSlots() {
+  return Array.from(activeEvents.values()).map((entry, index) => ({
+    ...entry,
+    slot: index + 1,
+  }));
+}
+
+/**
  * Clear all events from the registry. Used for testing.
  */
 export function clearRegistry() {
