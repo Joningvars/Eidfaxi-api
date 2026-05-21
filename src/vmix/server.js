@@ -25,6 +25,7 @@ import {
   getDefaultEventId,
   resolveEventId,
   getActiveEventsWithSlots,
+  updateEventLabel,
 } from './event-registry.js';
 import { log } from '../logger.js';
 import JSZip from 'jszip';
@@ -684,23 +685,25 @@ function renderControlHtml() {
       emptyState.style.display = 'none';
 
       // Render tab buttons
-      tabBar.innerHTML = activeEvents.map((ev) => {
-        const label = ev.name ? ev.name + ' (' + ev.eventId + ')' : String(ev.eventId);
+      tabBar.innerHTML = activeEvents.map((ev, idx) => {
+        const slot = idx + 1;
+        const displayLabel = ev.label || ev.name || String(ev.eventId);
+        const tabLabel = 'Slot ' + slot + ': ' + displayLabel;
         const isActive = ev.eventId === activeTabId;
         return '<button class="tab-btn' + (isActive ? ' active' : '') + '" data-event-id="' + ev.eventId + '" onclick="selectTab(' + ev.eventId + ')">'
-          + label
+          + tabLabel
           + '<span class="tab-close" onclick="event.stopPropagation(); removeEvent(' + ev.eventId + ')" title="Fjarlægja mót">&times;</span>'
           + '</button>';
       }).join('');
 
       // Render tab panels (only create if not existing)
-      activeEvents.forEach((ev) => {
+      activeEvents.forEach((ev, idx) => {
         let panel = document.getElementById('tab-panel-' + ev.eventId);
         if (!panel) {
           panel = document.createElement('div');
           panel.id = 'tab-panel-' + ev.eventId;
           panel.className = 'tab-content';
-          panel.innerHTML = createTabPanelHtml(ev);
+          panel.innerHTML = createTabPanelHtml(ev, idx + 1);
           tabPanels.appendChild(panel);
         }
         panel.classList.toggle('active', ev.eventId === activeTabId);
@@ -731,13 +734,19 @@ function renderControlHtml() {
       loadEventTabState(eventId);
     }
 
-    function createTabPanelHtml(ev) {
+    function createTabPanelHtml(ev, slotNum) {
       const eventId = ev.eventId;
-      const label = ev.name ? ev.name + ' (' + eventId + ')' : String(eventId);
+      const displayName = ev.name ? ev.name + ' (' + eventId + ')' : String(eventId);
+      const currentLabel = ev.label || '';
       return '<div class="tab-panel">'
         + '<div class="grid">'
         + '<div>'
-        + '<h2>' + label + '</h2>'
+        + '<h2>Slot ' + slotNum + ': ' + displayName + '</h2>'
+        + '<div style="display:flex;gap:8px;align-items:end;margin-bottom:10px">'
+        + '<div style="flex:1"><label>Nafn á slot (t.d. bílnúmer)</label>'
+        + '<input id="labelInput-' + eventId + '" type="text" placeholder="T.d. Bíll 1" value="' + currentLabel + '" /></div>'
+        + '<button class="secondary" style="width:auto;padding:10px 16px" onclick="updateSlotLabel(' + eventId + ')">Vista nafn</button>'
+        + '</div>'
         + '<div id="classIdState-' + eventId + '" class="statebox">classId state: hleð...</div>'
         + '<label>ClassId (valfrjálst handvirkt)</label>'
         + '<input id="classIdInput-' + eventId + '" type="number" placeholder="T.d. 203060" />'
@@ -751,7 +760,7 @@ function renderControlHtml() {
         + '</div>'
         + '<div>'
         + '<div class="card" style="margin:0">'
-        + '<h2>Flýtileiðir — Mót ' + eventId + '</h2>'
+        + '<h2>Flýtileiðir — Slot ' + slotNum + '</h2>'
         + '<p class="muted" style="margin-top:0">Sort: bættu við <code>?sort=start</code> eða <code>?sort=rank</code>.</p>'
         + '<div id="endpointButtons-' + eventId + '" class="endpoint-grid"></div>'
         + '</div>'
@@ -836,6 +845,30 @@ function renderControlHtml() {
     }
 
     // --- Refresh ---
+
+    async function updateSlotLabel(eventId) {
+      const input = document.getElementById('labelInput-' + eventId);
+      const label = String(input?.value || '').trim();
+      try {
+        const r = await fetch('/events/' + eventId + '/label', {
+          method: 'PATCH',
+          headers: headers(),
+          body: JSON.stringify({ label }),
+        });
+        if (!r.ok) {
+          const data = await r.json();
+          alert(data?.error || 'Villa');
+          return;
+        }
+        // Update local state and re-render tabs
+        const ev = activeEvents.find((e) => e.eventId === eventId);
+        if (ev) ev.label = label;
+        renderTabs();
+        selectTab(eventId);
+      } catch (e) {
+        alert('Villa: ' + e.message);
+      }
+    }
 
     async function refreshEventCompetition(eventId, competitionType) {
       const resultEl = document.getElementById('result-' + eventId);
@@ -1023,6 +1056,22 @@ export function registerVmixRoutes(app) {
     }
     res.setHeader('Content-Type', 'application/json');
     res.json({ ok: true, eventId });
+  });
+
+  app.patch('/events/:eventId/label', (req, res) => {
+    if (!requireControlSession(req, res, true)) return;
+    const eventId = Number(req.params.eventId);
+    if (!Number.isInteger(eventId) || eventId <= 0) {
+      return res.status(400).json({ error: 'Invalid eventId' });
+    }
+    const label = String(req.body?.label ?? '');
+    const updated = updateEventLabel(eventId, label);
+    if (!updated) {
+      return res
+        .status(404)
+        .json({ error: `Event ${eventId} is not registered` });
+    }
+    res.json({ ok: true, eventId, label });
   });
 
   app.get('/events', (req, res) => {

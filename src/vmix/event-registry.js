@@ -49,6 +49,7 @@ export function registerEvent(eventId, name) {
     eventId: parsed,
     addedAt: new Date().toISOString(),
     name: name ? String(name) : '',
+    label: '',
   };
   activeEvents.set(parsed, entry);
   initializeEventState(parsed);
@@ -168,4 +169,18 @@ export function getActiveEventsWithSlots() {
  */
 export function clearRegistry() {
   activeEvents.clear();
+}
+
+/**
+ * Update the label (display name) for a registered event's slot.
+ *
+ * @param {number} eventId - The event to update
+ * @param {string} label - The new label (e.g. "Bíll 1")
+ * @returns {boolean} true if updated, false if event not found
+ */
+export function updateEventLabel(eventId, label) {
+  const parsed = Number(eventId);
+  if (!activeEvents.has(parsed)) return false;
+  activeEvents.get(parsed).label = String(label || '');
+  return true;
 }
