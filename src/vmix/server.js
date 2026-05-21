@@ -26,6 +26,7 @@ import {
   resolveEventId,
   getActiveEventsWithSlots,
   updateEventLabel,
+  replaceEvent,
 } from './event-registry.js';
 import { log } from '../logger.js';
 import JSZip from 'jszip';
@@ -746,6 +747,11 @@ function renderControlHtml() {
         + '<input id="labelInput-' + eventId + '" type="text" placeholder="T.d. Bíll 1" value="' + currentLabel + '" /></div>'
         + '<button class="secondary" style="width:auto;padding:10px 16px" onclick="updateSlotLabel(' + eventId + ')">Vista nafn</button>'
         + '</div>'
+        + '<div style="display:flex;gap:8px;align-items:end;margin-bottom:10px">'
+        + '<div style="flex:1"><label>Skipta um mót á þessu sloti</label>'
+        + '<select id="swapSelect-' + eventId + '" class="swap-select"></select></div>'
+        + '<button class="secondary" style="width:auto;padding:10px 16px" onclick="swapEvent(' + eventId + ')">Skipta</button>'
+        + '</div>'
         + '<div id="classIdState-' + eventId + '" class="statebox">classId state: hleð...</div>'
         + '<label>ClassId (valfrjálst handvirkt)</label>'
         + '<input id="classIdInput-' + eventId + '" type="number" placeholder="T.d. 203060" />'
@@ -777,6 +783,7 @@ function renderControlHtml() {
         const data = await r.json();
         renderEventClassIdState(eventId, data);
         renderEventEndpoints(eventId);
+        populateSwapSelects();
       } catch (e) {
         console.error('Failed to load state for event', eventId, e);
       }
@@ -867,6 +874,43 @@ function renderControlHtml() {
       } catch (e) {
         alert('Villa: ' + e.message);
       }
+    }
+
+    async function swapEvent(oldEventId) {
+      const select = document.getElementById('swapSelect-' + oldEventId);
+      const newEventId = Number.parseInt(String(select?.value || ''), 10);
+      if (!Number.isInteger(newEventId) || newEventId <= 0) {
+        alert('Veldu mót til að skipta yfir á.');
+        return;
+      }
+      const selectedOption = select.options[select.selectedIndex];
+      const newName = selectedOption?.dataset?.eventName || '';
+      try {
+        const r = await fetch('/events/' + oldEventId + '/replace', {
+          method: 'PATCH',
+          headers: headers(),
+          body: JSON.stringify({ eventId: newEventId, name: newName }),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          alert(data?.error || 'Villa við að skipta um mót');
+          return;
+        }
+        // Reload everything
+        await loadActiveEvents();
+        selectTab(newEventId);
+      } catch (e) {
+        alert('Villa: ' + e.message);
+      }
+    }
+
+    function populateSwapSelects() {
+      const selects = document.querySelectorAll('.swap-select');
+      selects.forEach((select) => {
+        const eventSearchSelect = document.getElementById('eventSearchSelect');
+        if (!eventSearchSelect) return;
+        select.innerHTML = eventSearchSelect.innerHTML;
+      });
     }
 
     async function refreshEventCompetition(eventId, competitionType) {
@@ -1071,6 +1115,28 @@ export function registerVmixRoutes(app) {
         .json({ error: `Event ${eventId} is not registered` });
     }
     res.json({ ok: true, eventId, label });
+  });
+
+  app.patch('/events/:eventId/replace', async (req, res) => {
+    if (!requireControlSession(req, res, true)) return;
+    const oldEventId = Number(req.params.eventId);
+    const newEventId = req.body?.eventId;
+    const newName = req.body?.name || '';
+    try {
+      const entry = replaceEvent(oldEventId, newEventId, newName);
+
+      // Auto-resolve classIds for the new event
+      resolveClassIdsForEvent(entry.eventId).catch((err) => {
+        console.error(
+          `[Event Registry] Failed to resolve classIds for event ${entry.eventId}:`,
+          err.message,
+        );
+      });
+
+      res.json({ ok: true, event: entry });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
   });
 
   app.get('/events', (req, res) => {

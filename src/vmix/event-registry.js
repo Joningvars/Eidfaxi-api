@@ -184,3 +184,57 @@ export function updateEventLabel(eventId, label) {
   activeEvents.get(parsed).label = String(label || '');
   return true;
 }
+
+/**
+ * Replace the event on a slot with a new event, keeping the slot position and label.
+ * Cleans up old event state and initializes new event state.
+ *
+ * @param {number} oldEventId - The current event to replace
+ * @param {number} newEventId - The new event to put in its place
+ * @param {string} [newName] - Optional name for the new event
+ * @returns {{ eventId: number, addedAt: string, name: string, label: string }} The new entry
+ * @throws {Error} If oldEventId not found or newEventId invalid
+ */
+export function replaceEvent(oldEventId, newEventId, newName) {
+  const oldParsed = Number(oldEventId);
+  const newParsed = Number(newEventId);
+
+  if (!activeEvents.has(oldParsed)) {
+    throw new Error(`Event ${oldEventId} is not registered`);
+  }
+  if (!Number.isInteger(newParsed) || newParsed <= 0) {
+    throw new Error(`Invalid new eventId: must be a positive integer`);
+  }
+  if (activeEvents.has(newParsed) && newParsed !== oldParsed) {
+    throw new Error(`Event ${newParsed} is already registered in another slot`);
+  }
+
+  const oldEntry = activeEvents.get(oldParsed);
+  const label = oldEntry.label;
+
+  // Rebuild map preserving order, swapping old for new
+  const entries = Array.from(activeEvents.entries());
+  activeEvents.clear();
+
+  const newEntry = {
+    eventId: newParsed,
+    addedAt: new Date().toISOString(),
+    name: newName ? String(newName) : '',
+    label,
+  };
+
+  for (const [key, value] of entries) {
+    if (key === oldParsed) {
+      activeEvents.set(newParsed, newEntry);
+    } else {
+      activeEvents.set(key, value);
+    }
+  }
+
+  // Clean up old, initialize new
+  removeEventState(oldParsed);
+  cancelRefreshesForEvent(oldParsed);
+  initializeEventState(newParsed);
+
+  return newEntry;
+}
