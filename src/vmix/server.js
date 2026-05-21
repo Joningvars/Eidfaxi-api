@@ -3,6 +3,9 @@ import {
   getLeaderboardState,
   getCompetitionMetadata,
   getCompetitionSpecificMetadata,
+  getLeaderboardForEvent,
+  getEventState,
+  getAllEventsMetadata,
 } from './state.js';
 import { leaderboardToCsv } from './normalizer.js';
 import { apiGetWithRetry } from '../sportfengur.js';
@@ -12,7 +15,14 @@ import {
   SPORTFENGUR_LOCALE,
 } from '../config.js';
 import { requireControlSession } from '../control-auth.js';
-import { refreshCompetitionNow } from './refresh.js';
+import { refreshCompetitionNow, isRefreshInProgress } from './refresh.js';
+import {
+  registerEvent,
+  removeEvent,
+  getActiveEvents,
+  isEventActive,
+  getDefaultEventId,
+} from './event-registry.js';
 import { log } from '../logger.js';
 import JSZip from 'jszip';
 
@@ -229,7 +239,10 @@ function resolveCompetitionRequest(req, res, defaultSort = 'start') {
     return null;
   }
 
-  const leaderboard = getLeaderboardState(competitionId);
+  const eventId = req.resolvedEventId;
+  const leaderboard = eventId
+    ? getLeaderboardForEvent(eventId, competitionId)
+    : getLeaderboardState(competitionId);
   const sorted = sortLeaderboard(leaderboard, sort);
   const search = req.query.search == null ? '' : String(req.query.search);
   const filtered = filterLeaderboardBySearch(sorted, search);
@@ -240,6 +253,116 @@ function parsePositiveInt(value) {
   const parsed = Number.parseInt(String(value), 10);
   if (!Number.isInteger(parsed) || parsed <= 0) return null;
   return parsed;
+}
+
+/**
+ * Legacy route resolution middleware.
+ * Resolves which event to serve for legacy endpoints (without eventId in URL).
+ *
+ * Resolution order:
+ * 1. If 0 active events → HTTP 404
+ * 2. If 1 active event → resolve to that event
+ * 3. If multiple + default configured → resolve to default
+ * 4. If multiple + no default → HTTP 409 with list of active eventIds
+ */
+export function resolveLegacyEvent(req, res, next) {
+  const activeEvents = getActiveEvents();
+
+  if (activeEvents.length === 0) {
+    return res.status(404).json({ error: 'No active events' });
+  }
+  if (activeEvents.length === 1) {
+    req.resolvedEventId = activeEvents[0].eventId;
+    return next();
+  }
+  const defaultId = getDefaultEventId();
+  if (defaultId) {
+    req.resolvedEventId = defaultId;
+    return next();
+  }
+  return res.status(409).json({
+    error: 'Multiple active events — specify eventId in URL',
+    activeEvents: activeEvents.map((e) => e.eventId),
+  });
+}
+
+/**
+ * Validate eventId param: must be a positive integer and present in the registry.
+ * Returns the parsed eventId or null (after sending an error response).
+ */
+function validateEventId(req, res) {
+  const raw = req.params.eventId;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (
+    !Number.isInteger(parsed) ||
+    parsed <= 0 ||
+    String(parsed) !== String(raw)
+  ) {
+    res
+      .status(400)
+      .json({ error: 'Invalid eventId: must be a positive integer' });
+    return null;
+  }
+  if (!isEventActive(parsed)) {
+    res.status(404).json({ error: `Event ${parsed} is not active` });
+    return null;
+  }
+  return parsed;
+}
+
+/**
+ * Validate competitionType param: must be one of the supported types.
+ * Returns the competitionId or null (after sending an error response).
+ */
+function validateCompetitionType(req, res) {
+  const competitionType = String(req.params.competitionType || '')
+    .trim()
+    .toLowerCase();
+  const competitionId = COMPETITION_TYPE_TO_ID[competitionType];
+  if (!competitionId) {
+    res.status(404).json({
+      error: 'Unknown competition type',
+      competitionType,
+      supported: Object.keys(COMPETITION_TYPE_TO_ID),
+    });
+    return null;
+  }
+  return { competitionType, competitionId };
+}
+
+/**
+ * Resolve a multi-event competition request: validates eventId and competitionType,
+ * retrieves the leaderboard, applies sort and search filters.
+ */
+function resolveMultiEventRequest(req, res, defaultSort = 'start') {
+  const eventId = validateEventId(req, res);
+  if (eventId === null) return null;
+
+  const scope = validateCompetitionType(req, res);
+  if (!scope) return null;
+  const { competitionType, competitionId } = scope;
+
+  const sort = req.query.sort == null ? defaultSort : String(req.query.sort);
+  if (sort !== 'start' && sort !== 'rank' && sort !== 'teams') {
+    res.status(400).json({
+      error: 'Invalid sort value',
+      supported: ['start', 'rank', 'teams'],
+    });
+    return null;
+  }
+
+  const leaderboard = getLeaderboardForEvent(eventId, competitionId);
+  const sorted = sortLeaderboard(leaderboard, sort);
+  const search = req.query.search == null ? '' : String(req.query.search);
+  const filtered = filterLeaderboardBySearch(sorted, search);
+  return {
+    eventId,
+    competitionType,
+    competitionId,
+    sort,
+    sorted: filtered,
+    search,
+  };
 }
 
 async function classBelongsToEventCompetition(eventId, classId, competitionId) {
@@ -256,11 +379,11 @@ async function classBelongsToEventCompetition(eventId, classId, competitionId) {
 
 function renderControlHtml() {
   return `<!doctype html>
-  <html lang="is">
+<html lang="is">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Eidfaxi Stjorn</title>
+  <title>Eidfaxi Stjórnborð</title>
   <style>
     :root { --bg:#f3f4f6; --panel:#ffffff; --line:#d1d5db; --fg:#111827; --muted:#6b7280; --ok:#047857; --warn:#b45309; --primary:#2563eb; --primaryHover:#1d4ed8; --secondary:#4b5563; --secondaryHover:#374151; --danger:#b91c1c; --dangerHover:#991b1b; }
     * { box-sizing:border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; }
@@ -270,19 +393,14 @@ function renderControlHtml() {
     .header { margin-bottom:12px; display:flex; flex-direction:column; gap:8px; }
     .header h1 { margin:0; font-size:28px; text-align:center; }
     .sub { color:var(--muted); font-size:14px; text-align:center; }
-    .status { background:#eef2ff; color:#1e3a8a; border:1px solid #c7d2fe; border-radius:8px; padding:8px 10px; font-size:14px; align-self:center; }
-    .grid { display:grid; grid-template-columns:1fr; gap:12px; align-items:start; }
-    @media (min-width: 980px) {
-      .grid { grid-template-columns: 1.3fr 0.85fr; }
-    }
-    .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:12px; }
     h2 { margin:0 0 10px; font-size:20px; }
     label { display:block; margin:8px 0 6px; color:var(--muted); font-size:13px; font-weight:600; }
     input,select { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #cbd5e1; background:#fff; color:#111827; font-size:15px; }
     input:focus,select:focus { outline:none; border-color:#93c5fd; box-shadow:0 0 0 3px rgba(147,197,253,.35); }
-    .row { display:grid; grid-template-columns:1fr; gap:10px; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; align-items:end; }
     .btns { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
-    button { border:1px solid transparent; border-radius:8px; padding:11px 12px; cursor:pointer; font-weight:600; font-size:15px; width:100%; transition: background-color .15s ease; }
+    button { border:1px solid transparent; border-radius:8px; padding:11px 12px; cursor:pointer; font-weight:600; font-size:15px; transition: background-color .15s ease; }
     button:disabled { opacity:.5; cursor:not-allowed; }
     .primary { background:var(--primary); color:#fff; border-color:#1e40af; }
     .secondary { background:var(--secondary); color:#fff; border-color:#374151; }
@@ -307,548 +425,502 @@ function renderControlHtml() {
     #webhookLog { min-height:120px; max-height:220px; overflow:auto; }
     .ok { color:var(--ok); }
     .warn { color:var(--warn); }
-    .three { display:grid; grid-template-columns:1fr; gap:10px; margin-top:10px; }
-    .btns button { width:auto; flex:1 1 180px; }
+    .three { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:10px; }
     .loading { opacity:.72; pointer-events:none; }
+    /* Tab styles */
+    .tab-bar { display:flex; gap:0; border-bottom:2px solid var(--line); margin-bottom:0; overflow-x:auto; }
+    .tab-btn { padding:10px 16px; border:1px solid transparent; border-bottom:none; border-radius:8px 8px 0 0; background:transparent; color:var(--muted); font-size:14px; font-weight:600; cursor:pointer; white-space:nowrap; position:relative; top:2px; }
+    .tab-btn:hover { background:#eef2ff; color:var(--primary); }
+    .tab-btn.active { background:var(--panel); border-color:var(--line); color:var(--primary); border-bottom:2px solid var(--panel); }
+    .tab-btn .tab-close { margin-left:8px; color:var(--muted); font-size:12px; border-radius:50%; padding:2px 5px; }
+    .tab-btn .tab-close:hover { background:#fee2e2; color:var(--danger); }
+    .tab-content { display:none; }
+    .tab-content.active { display:block; }
+    .tab-panel { background:var(--panel); border:1px solid var(--line); border-top:none; border-radius:0 0 10px 10px; padding:16px; }
+    .empty-tabs { text-align:center; padding:32px 16px; color:var(--muted); font-size:15px; }
+    .event-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .event-tag { background:#eef2ff; border:1px solid #c7d2fe; border-radius:6px; padding:4px 10px; font-size:13px; color:#1e3a8a; font-weight:500; }
+    .grid { display:grid; grid-template-columns:1fr; gap:12px; align-items:start; }
+    @media (min-width: 980px) {
+      .grid { grid-template-columns: 1.3fr 0.85fr; }
+    }
   </style>
 </head>
-  <body>
+<body>
   <div class="wrap">
     <div class="header">
-      <div>
-        <h1>Eidfaxi Stjornborð</h1>
-        <div class="sub">Veldu virkt mot og keyrðu handvirka uppfærslu úr Sportfengur fyrir vMix grafík.</div>
+      <h1>Eidfaxi Stjórnborð</h1>
+      <div class="sub">Stjórnborð fyrir fjölda móta — bættu við mótum og stjórnaðu hverju móti í sínum flipa.</div>
+    </div>
+
+    <!-- GLOBAL SECTION -->
+    <div class="card" id="globalSection">
+      <h2>Bæta við móti</h2>
+      <div class="row">
+        <div>
+          <label>Land</label>
+          <select id="countrySelect">
+            <option value="IS" selected>Ísland</option>
+            <option value="SE">Svíþjóð</option>
+            <option value="DK">Danmörk</option>
+            <option value="NO">Noregur</option>
+            <option value="FI">Finnland</option>
+            <option value="DE">Þýskaland</option>
+            <option value="NL">Holland</option>
+            <option value="GB">Bretland</option>
+            <option value="US">Bandaríkin</option>
+            <option value="">Öll lönd</option>
+          </select>
+        </div>
+        <div>
+          <label>Veldu mót</label>
+          <select id="eventSearchSelect">
+            <option value="">Hleð mótum...</option>
+          </select>
+        </div>
+      </div>
+      <div class="btns">
+        <button class="primary" id="addEventBtn">Bæta við móti</button>
+      </div>
+      <div style="margin-top:12px">
+        <label>Virk mót (<span id="eventCount">0</span>/10)</label>
+        <div id="activeEventList" class="event-list">
+          <span class="muted">Engin virk mót.</span>
+        </div>
       </div>
     </div>
-    <div class="grid">
-    <div class="card">
-      <h2>Handvirk uppfærsla</h2>
-      <div id="filterStatus" class="status">Motasía: hleð...</div>
-      <label>Land</label>
-      <select id="countrySelect">
-        <option value="IS" selected>Ísland</option>
-        <option value="SE">Svíþjóð</option>
-        <option value="DK">Danmörk</option>
-        <option value="NO">Noregur</option>
-        <option value="FI">Finnland</option>
-        <option value="DE">Þýskaland</option>
-        <option value="NL">Holland</option>
-        <option value="GB">Bretland</option>
-        <option value="US">Bandaríkin</option>
-        <option value="">Öll lönd</option>
-      </select>
-      <label>Veldu mot</label>
-      <select id="eventSelect">
-        <option value="">Hleð motum...</option>
-      </select>
-      <label>ClassId úr Sportfengur (valfrjálst)</label>
-      <select id="classIdSelect">
-        <option value="">Sjálfvirkt val per keppni</option>
-      </select>
-      <label>Flokksnúmer (classId) - valfrjálst</label>
-      <input id="classIdInput" type="number" placeholder="T.d. 203060" />
-      <div class="btns">
-        <button class="secondary" onclick="setEventFilter()">Vista mot</button>
-        <button class="danger" onclick="clearEventFilter()">Hreinsa mot</button>
-      </div>
-      <div class="three">
-        <button id="btn-forkeppni" data-refresh-btn data-competition-type="forkeppni" class="primary" onclick="refreshCompetition('forkeppni')">Uppfæra forkeppni</button>
-        <button id="btn-a-urslit" data-refresh-btn data-competition-type="a-urslit" class="primary" onclick="refreshCompetition('a-urslit')">Uppfæra a-urslit</button>
-        <button id="btn-b-urslit" data-refresh-btn data-competition-type="b-urslit" class="primary" onclick="refreshCompetition('b-urslit')">Uppfæra b-urslit</button>
-      </div>
-      <div id="classIdState" class="statebox">classId state: hleð...</div>
-      <p class="muted">Veldu mot. Ef classId vantar í state geturðu sett það handvirkt hér.</p>
-      <h2 style="margin-top:14px">Niðurstaða</h2>
-      <pre id="result"></pre>
-      <h2 style="margin-top:14px">Nýleg webhook skilaboð</h2>
+
+    <!-- TAB BAR -->
+    <div id="tabBar" class="tab-bar"></div>
+
+    <!-- TAB CONTENT PANELS -->
+    <div id="tabPanels"></div>
+
+    <!-- EMPTY STATE -->
+    <div id="emptyState" class="card empty-tabs">
+      <p>Engin virk mót. Veldu mót úr listanum hér að ofan og smelltu á „Bæta við móti".</p>
+    </div>
+
+    <!-- WEBHOOK LOG (global) -->
+    <div class="card" style="margin-top:12px">
+      <h2>Nýleg webhook skilaboð</h2>
       <pre id="webhookLog">Hleð webhook log...</pre>
     </div>
-    <div class="card shortcuts-card">
-      <h2>Flýtileiðir í API</h2>
-      <p class="muted" style="margin-top:0">Sort: bættu við <code>?sort=start</code> eða <code>?sort=rank</code> eftir þörfum.</p>
-      <div id="endpointButtons" class="endpoint-grid"></div>
-    </div>
-    </div>
   </div>
+
   <script>
-    const out = document.getElementById('result');
-    const webhookOut = document.getElementById('webhookLog');
-    const filterStatus = document.getElementById('filterStatus');
-    const classIdState = document.getElementById('classIdState');
-    const endpointButtons = document.getElementById('endpointButtons');
-    const eventSelect = document.getElementById('eventSelect');
-    const countrySelect = document.getElementById('countrySelect');
-    const classIdSelect = document.getElementById('classIdSelect');
-    const classIdInput = document.getElementById('classIdInput');
-    const card = document.querySelector('.card');
-    const refreshButtons = Array.from(document.querySelectorAll('[data-refresh-btn]'));
-    const actionButtons = Array.from(document.querySelectorAll('button'));
+    const MAX_TABS = 10;
     const COMPETITION_TYPE_TO_ID = { 'forkeppni': 1, 'a-urslit': 2, 'b-urslit': 3 };
-    let eventState = null;
-    let classIdFromTests = {};
-    let currentFilterValue = null;
+    let activeEvents = [];
+    let activeTabId = null;
     let busy = false;
+
     function headers() {
       return { 'Content-Type': 'application/json' };
     }
-    function show(obj, ok = true) {
-      out.className = ok ? 'ok' : 'warn';
-      out.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
-    }
-    function setBusy(value) {
-      busy = value;
-      card.classList.toggle('loading', value);
-      actionButtons.forEach((b) => {
-        b.disabled = value;
-      });
-      if (!value) {
-        syncRefreshButtons();
-      }
-      renderEndpointButtons();
-    }
-    function setFilterStatus(val) {
-      currentFilterValue = val ? Number(val) : null;
-      filterStatus.textContent = val ? 'Motasía: ' + val : 'Motasía: engin';
-    }
+
     function getApiBase() {
       return window.location.origin;
     }
-    function renderEndpointButtons() {
-      const eventId = getSelectedEventId() || currentFilterValue;
-      const buttons = [];
 
-      ['forkeppni', 'b-urslit', 'a-urslit'].forEach((type) => {
-        buttons.push({ label: 'event/' + type, path: '/event/' + type, needsEvent: false });
-        buttons.push({ label: 'event/' + type + '/results', path: '/event/' + type + '/results', needsEvent: false });
-        buttons.push({ label: 'event/' + type + '/groups?groupSize=7', path: '/event/' + type + '/groups?groupSize=7', needsEvent: false });
-        buttons.push({ label: 'event/' + type + '/group?groupSize=7&group=1', path: '/event/' + type + '/group?groupSize=7&group=1', needsEvent: false });
-        buttons.push({ label: 'event/' + type + '/groups/flat?groupSize=7', path: '/event/' + type + '/groups/flat?groupSize=7', needsEvent: false });
-        buttons.push({ label: 'event/' + type + '/csv', path: '/event/' + type + '/csv', needsEvent: false });
+    // --- Event Management ---
+
+    async function loadEventSearchOptions() {
+      const countrySelect = document.getElementById('countrySelect');
+      const eventSearchSelect = document.getElementById('eventSearchSelect');
+      const year = new Date().getFullYear();
+      const country = countrySelect.value;
+      const params = 'ar=' + year + (country ? '&land=' + country : '');
+      try {
+        const r = await fetch('/events/search?' + params);
+        const data = await r.json();
+        const events = Array.isArray(data?.tournaments)
+          ? data.tournaments
+          : Array.isArray(data?.res)
+            ? data.res
+            : [];
+        const normalized = events.map((item) => {
+          const eventId = item.numer ?? item.mot_numer ?? item.eventId ?? item.id;
+          const name = item.motsheiti ?? item.mot_heiti ?? item.name ?? 'Mót';
+          const startsAt = item.byrjunardagsetning ?? item.dagsetning_byrjar ?? item.mot_byrjar ?? '';
+          return {
+            eventId: Number.parseInt(String(eventId), 10),
+            name: String(name || 'Mót'),
+            startsAt: String(startsAt || ''),
+          };
+        }).filter((item) => Number.isInteger(item.eventId) && item.eventId > 0);
+        normalized.sort((a, b) => String(b.startsAt).localeCompare(String(a.startsAt)));
+
+        eventSearchSelect.innerHTML = '';
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Veldu mót...';
+        eventSearchSelect.appendChild(placeholder);
+
+        normalized.forEach((item) => {
+          const option = document.createElement('option');
+          option.value = String(item.eventId);
+          option.textContent = item.startsAt
+            ? item.eventId + ' - ' + item.name + ' (' + item.startsAt + ')'
+            : item.eventId + ' - ' + item.name;
+          option.dataset.eventName = item.name;
+          eventSearchSelect.appendChild(option);
+        });
+      } catch (e) {
+        console.error('Failed to load events:', e);
+      }
+    }
+
+    async function loadActiveEvents() {
+      try {
+        const r = await fetch('/events');
+        const data = await r.json();
+        activeEvents = Array.isArray(data?.events) ? data.events : [];
+        renderActiveEventList();
+        renderTabs();
+      } catch (e) {
+        console.error('Failed to load active events:', e);
+      }
+    }
+
+    function renderActiveEventList() {
+      const container = document.getElementById('activeEventList');
+      const countEl = document.getElementById('eventCount');
+      countEl.textContent = String(activeEvents.length);
+      if (activeEvents.length === 0) {
+        container.innerHTML = '<span class="muted">Engin virk mót.</span>';
+        return;
+      }
+      container.innerHTML = activeEvents.map((ev) => {
+        const label = ev.name ? ev.name + ' (' + ev.eventId + ')' : String(ev.eventId);
+        return '<span class="event-tag">' + label + '</span>';
+      }).join('');
+    }
+
+    async function addEvent() {
+      const eventSearchSelect = document.getElementById('eventSearchSelect');
+      const eventId = Number.parseInt(String(eventSearchSelect.value || ''), 10);
+      if (!Number.isInteger(eventId) || eventId <= 0) {
+        alert('Veldu mót úr listanum fyrst.');
+        return;
+      }
+      if (activeEvents.length >= MAX_TABS) {
+        alert('Hámark 10 virk mót náð. Fjarlægðu mót til að bæta við nýju.');
+        return;
+      }
+      try {
+        const r = await fetch('/events/register', {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ eventId }),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          alert(data?.error || 'Villa við skráningu móts');
+          return;
+        }
+        // Get event name from dropdown
+        const selectedOption = eventSearchSelect.options[eventSearchSelect.selectedIndex];
+        const eventName = selectedOption?.dataset?.eventName || '';
+        const newEvent = { eventId, name: eventName, addedAt: data?.event?.addedAt || new Date().toISOString() };
+        if (!activeEvents.some((e) => e.eventId === eventId)) {
+          activeEvents.push(newEvent);
+        }
+        renderActiveEventList();
+        renderTabs();
+        selectTab(eventId);
+      } catch (e) {
+        alert('Villa: ' + e.message);
+      }
+    }
+
+    async function removeEvent(eventId) {
+      if (!confirm('Ertu viss um að fjarlægja mót ' + eventId + '?')) return;
+      try {
+        const r = await fetch('/events/' + eventId, { method: 'DELETE', headers: headers() });
+        const data = await r.json();
+        if (!r.ok) {
+          alert(data?.error || 'Villa við að fjarlægja mót');
+          return;
+        }
+        const idx = activeEvents.findIndex((e) => e.eventId === eventId);
+        activeEvents = activeEvents.filter((e) => e.eventId !== eventId);
+        renderActiveEventList();
+
+        // Switch to nearest tab (next to the right, or last remaining)
+        if (activeTabId === eventId) {
+          if (activeEvents.length === 0) {
+            activeTabId = null;
+          } else {
+            const nextIdx = Math.min(idx, activeEvents.length - 1);
+            activeTabId = activeEvents[nextIdx].eventId;
+          }
+        }
+        renderTabs();
+      } catch (e) {
+        alert('Villa: ' + e.message);
+      }
+    }
+
+    // --- Tab Management ---
+
+    function renderTabs() {
+      const tabBar = document.getElementById('tabBar');
+      const tabPanels = document.getElementById('tabPanels');
+      const emptyState = document.getElementById('emptyState');
+
+      if (activeEvents.length === 0) {
+        tabBar.innerHTML = '';
+        tabPanels.innerHTML = '';
+        emptyState.style.display = 'block';
+        return;
+      }
+      emptyState.style.display = 'none';
+
+      // Render tab buttons
+      tabBar.innerHTML = activeEvents.map((ev) => {
+        const label = ev.name ? ev.name + ' (' + ev.eventId + ')' : String(ev.eventId);
+        const isActive = ev.eventId === activeTabId;
+        return '<button class="tab-btn' + (isActive ? ' active' : '') + '" data-event-id="' + ev.eventId + '" onclick="selectTab(' + ev.eventId + ')">'
+          + label
+          + '<span class="tab-close" onclick="event.stopPropagation(); removeEvent(' + ev.eventId + ')" title="Fjarlægja mót">&times;</span>'
+          + '</button>';
+      }).join('');
+
+      // Render tab panels (only create if not existing)
+      activeEvents.forEach((ev) => {
+        let panel = document.getElementById('tab-panel-' + ev.eventId);
+        if (!panel) {
+          panel = document.createElement('div');
+          panel.id = 'tab-panel-' + ev.eventId;
+          panel.className = 'tab-content';
+          panel.innerHTML = createTabPanelHtml(ev);
+          tabPanels.appendChild(panel);
+        }
+        panel.classList.toggle('active', ev.eventId === activeTabId);
       });
 
-      if (eventId) {
-        buttons.push({ label: 'event/' + eventId + '/tests', path: '/event/' + eventId + '/tests', needsEvent: true });
-        buttons.push({ label: 'event/' + eventId + '/participants', path: '/event/' + eventId + '/participants', needsEvent: true });
-      } else {
-        buttons.push({ label: 'event/{eventId}/tests', path: '', needsEvent: true });
-        buttons.push({ label: 'event/{eventId}/participants', path: '', needsEvent: true });
+      // Remove panels for events no longer active
+      const panelEls = tabPanels.querySelectorAll('.tab-content');
+      panelEls.forEach((el) => {
+        const id = Number(el.id.replace('tab-panel-', ''));
+        if (!activeEvents.some((e) => e.eventId === id)) {
+          el.remove();
+        }
+      });
+    }
+
+    function selectTab(eventId) {
+      activeTabId = eventId;
+      // Update tab button active states
+      document.querySelectorAll('.tab-btn').forEach((btn) => {
+        btn.classList.toggle('active', Number(btn.dataset.eventId) === eventId);
+      });
+      // Update panel visibility
+      document.querySelectorAll('.tab-content').forEach((panel) => {
+        const panelId = Number(panel.id.replace('tab-panel-', ''));
+        panel.classList.toggle('active', panelId === eventId);
+      });
+      // Load state for this event
+      loadEventTabState(eventId);
+    }
+
+    function createTabPanelHtml(ev) {
+      const eventId = ev.eventId;
+      const label = ev.name ? ev.name + ' (' + eventId + ')' : String(eventId);
+      return '<div class="tab-panel">'
+        + '<div class="grid">'
+        + '<div>'
+        + '<h2>' + label + '</h2>'
+        + '<div id="classIdState-' + eventId + '" class="statebox">classId state: hleð...</div>'
+        + '<label>ClassId (valfrjálst handvirkt)</label>'
+        + '<input id="classIdInput-' + eventId + '" type="number" placeholder="T.d. 203060" />'
+        + '<div class="three">'
+        + '<button class="primary" onclick="refreshEventCompetition(' + eventId + ', \'forkeppni\')">Uppfæra forkeppni</button>'
+        + '<button class="primary" onclick="refreshEventCompetition(' + eventId + ', \'a-urslit\')">Uppfæra a-úrslit</button>'
+        + '<button class="primary" onclick="refreshEventCompetition(' + eventId + ', \'b-urslit\')">Uppfæra b-úrslit</button>'
+        + '</div>'
+        + '<h2 style="margin-top:14px">Niðurstaða</h2>'
+        + '<pre id="result-' + eventId + '"></pre>'
+        + '</div>'
+        + '<div>'
+        + '<div class="card" style="margin:0">'
+        + '<h2>Flýtileiðir — Mót ' + eventId + '</h2>'
+        + '<p class="muted" style="margin-top:0">Sort: bættu við <code>?sort=start</code> eða <code>?sort=rank</code>.</p>'
+        + '<div id="endpointButtons-' + eventId + '" class="endpoint-grid"></div>'
+        + '</div>'
+        + '</div>'
+        + '</div>'
+        + '</div>';
+    }
+
+    // --- Per-Event State Loading ---
+
+    async function loadEventTabState(eventId) {
+      try {
+        const r = await fetch('/event/' + eventId + '/state');
+        if (!r.ok) return;
+        const data = await r.json();
+        renderEventClassIdState(eventId, data);
+        renderEventEndpoints(eventId);
+      } catch (e) {
+        console.error('Failed to load state for event', eventId, e);
       }
+    }
 
-      buttons.push({ label: 'event/current', path: '/event/current', needsEvent: false });
-      buttons.push({ label: 'event/leaderboards.zip', path: '/event/leaderboards.zip', needsEvent: false });
-      buttons.push({ label: 'event/csv.zip', path: '/event/csv.zip', needsEvent: false });
-      buttons.push({ label: 'events/search (ár)', path: '/events/search?ar=' + new Date().getFullYear() + '&land=' + (countrySelect.value || ''), needsEvent: false });
+    function renderEventClassIdState(eventId, stateData) {
+      const el = document.getElementById('classIdState-' + eventId);
+      if (!el) return;
+      const competitions = stateData?.competitions || {};
+      const types = [
+        { id: '1', label: 'forkeppni' },
+        { id: '2', label: 'a-úrslit' },
+        { id: '3', label: 'b-úrslit' },
+      ];
+      const rows = types.map((t) => {
+        const comp = competitions[t.id];
+        const classId = comp?.classId;
+        const count = comp?.leaderboardCount ?? 0;
+        return { label: t.label, classId, count };
+      });
+      el.innerHTML = '<div class="title">classId og gögn fyrir mót ' + eventId + '</div>'
+        + '<div class="stategrid">'
+        + rows.map((row) => {
+          const valHtml = row.classId
+            ? '<span class="stateval">' + row.classId + ' (' + row.count + ' færslur)</span>'
+            : '<span class="stateval missing">ekki sett</span>';
+          return '<div class="statekey">' + row.label + '</div><div>' + valHtml + '</div>';
+        }).join('')
+        + '</div>';
+    }
 
-      endpointButtons.innerHTML = '';
+    function renderEventEndpoints(eventId) {
+      const container = document.getElementById('endpointButtons-' + eventId);
+      if (!container) return;
+      const buttons = [];
+      ['forkeppni', 'a-urslit', 'b-urslit'].forEach((type) => {
+        buttons.push({ label: 'event/' + eventId + '/' + type, path: '/event/' + eventId + '/' + type });
+        buttons.push({ label: 'event/' + eventId + '/' + type + '/results', path: '/event/' + eventId + '/' + type + '/results' });
+        buttons.push({ label: 'event/' + eventId + '/' + type + '/groups?groupSize=7', path: '/event/' + eventId + '/' + type + '/groups?groupSize=7' });
+        buttons.push({ label: 'event/' + eventId + '/' + type + '/csv', path: '/event/' + eventId + '/' + type + '/csv' });
+      });
+      buttons.push({ label: 'event/' + eventId + '/leaderboards.zip', path: '/event/' + eventId + '/leaderboards.zip' });
+      buttons.push({ label: 'event/' + eventId + '/csv.zip', path: '/event/' + eventId + '/csv.zip' });
+      buttons.push({ label: 'event/' + eventId + '/state', path: '/event/' + eventId + '/state' });
+      buttons.push({ label: 'event/' + eventId + '/tests', path: '/event/' + eventId + '/tests' });
+
+      container.innerHTML = '';
       for (let i = 0; i < buttons.length; i += 2) {
         const row = document.createElement('div');
         row.className = 'endpoint-row';
-        for (let j = 0; j < 2; j += 1) {
+        for (let j = 0; j < 2; j++) {
           const item = buttons[i + j];
           if (!item) continue;
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'endpoint-btn';
           btn.textContent = item.label;
-          const disabled = busy || (item.needsEvent && !eventId);
-          btn.disabled = disabled;
           btn.addEventListener('click', () => {
-            if (!item.path) return;
-            const url = getApiBase() + item.path;
-            window.open(url, '_blank', 'noopener');
+            window.open(getApiBase() + item.path, '_blank', 'noopener');
           });
           row.appendChild(btn);
         }
-        endpointButtons.appendChild(row);
+        container.appendChild(row);
       }
     }
-    function getSelectedEventId() {
-      const raw = String(eventSelect.value || '').trim();
-      if (!raw) return null;
-      const parsed = Number.parseInt(raw, 10);
-      return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-    }
-    function upsertSelectedEventOption(eventId) {
-      if (!eventId) return;
-      const value = String(eventId);
-      const existing = Array.from(eventSelect.options).find((o) => o.value === value);
-      if (existing) {
-        eventSelect.value = value;
-        return;
-      }
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = value + ' - Valið mot';
-      eventSelect.prepend(option);
-      eventSelect.value = value;
-    }
-    async function loadEventOptions() {
-      const year = new Date().getFullYear();
-      const country = countrySelect.value;
-      const params = 'ar=' + year + (country ? '&land=' + country : '');
-      const r = await fetch('/events/search?' + params);
-      const data = await r.json();
-      const events = Array.isArray(data?.tournaments)
-        ? data.tournaments
-        : Array.isArray(data?.res)
-          ? data.res
-          : [];
-      if (!r.ok) {
-        throw new Error(data?.message || data?.error || 'Failed to load events');
-      }
-      const normalized = events.map((item) => {
-        const eventId = item.numer ?? item.mot_numer ?? item.eventId ?? item.id;
-        const name = item.motsheiti ?? item.mot_heiti ?? item.name ?? 'Mot';
-        const startsAt =
-          item.byrjunardagsetning ??
-          item.dagsetning_byrjar ??
-          item.mot_byrjar ??
-          '';
-        return {
-          eventId: Number.parseInt(String(eventId), 10),
-          name: String(name || 'Mot'),
-          startsAt: String(startsAt || ''),
-        };
-      }).filter((item) => Number.isInteger(item.eventId) && item.eventId > 0);
-      normalized.sort((a, b) => String(b.startsAt).localeCompare(String(a.startsAt)));
 
-      eventSelect.innerHTML = '';
-      const placeholder = document.createElement('option');
-      placeholder.value = '';
-      placeholder.textContent = 'Veldu mot...';
-      eventSelect.appendChild(placeholder);
+    // --- Refresh ---
 
-      normalized.forEach((item) => {
-        const option = document.createElement('option');
-        option.value = String(item.eventId);
-        option.textContent = item.startsAt
-          ? item.eventId + ' - ' + item.name + ' (' + item.startsAt + ')'
-          : item.eventId + ' - ' + item.name;
-        eventSelect.appendChild(option);
-      });
-
-      const selected = currentFilterValue || getSelectedEventId();
-      if (selected) {
-        upsertSelectedEventOption(selected);
+    async function refreshEventCompetition(eventId, competitionType) {
+      const resultEl = document.getElementById('result-' + eventId);
+      const classIdInput = document.getElementById('classIdInput-' + eventId);
+      const body = {};
+      const manualClassId = Number.parseInt(String(classIdInput?.value || ''), 10);
+      if (Number.isInteger(manualClassId) && manualClassId > 0) {
+        body.classId = manualClassId;
       }
-      renderEndpointButtons();
-    }
-    function hasStateContext() {
-      if (!eventState) return false;
-      const selectedEventId = getSelectedEventId() || currentFilterValue;
-      if (!selectedEventId) return false;
-      if (
-        Number(eventState?.current?.eventId) === Number(selectedEventId) &&
-        eventState?.current?.classId
-      ) {
-        return true;
-      }
-      const comps = eventState?.competitions || {};
-      return Object.values(comps).some(
-        (c) =>
-          c &&
-          Number(c.eventId) === Number(selectedEventId) &&
-          c.classId,
-      );
-    }
-    function getStateClassIdForCompetition(competitionType) {
-      const selectedEventId = getSelectedEventId() || currentFilterValue;
-      if (!selectedEventId || !eventState) return null;
-      const competitionId = COMPETITION_TYPE_TO_ID[competitionType];
-      const entry = eventState?.competitions?.[competitionId];
-      if (entry && Number(entry.eventId) === Number(selectedEventId) && entry.classId) {
-        return Number(entry.classId);
-      }
-      return null;
-    }
-    function getResolvedClassIdForCompetition(competitionType) {
-      const manual = Number.parseInt(String(classIdInput.value || '').trim(), 10);
-      if (Number.isInteger(manual) && manual > 0) return manual;
-      const selectedClassId = String(classIdSelect.value || '').trim();
-      if (selectedClassId) {
-        const [selectedType, selectedValue] = selectedClassId.split(':');
-        const parsedSelected = Number.parseInt(String(selectedValue || ''), 10);
-        if (
-          selectedType === competitionType &&
-          Number.isInteger(parsedSelected) &&
-          parsedSelected > 0
-        ) {
-          return parsedSelected;
-        }
-      }
-      const fromState = getStateClassIdForCompetition(competitionType);
-      if (fromState) return fromState;
-      const fromTests = classIdFromTests[competitionType]?.[0]?.classId;
-      return Number.isInteger(fromTests) && fromTests > 0 ? fromTests : null;
-    }
-    function renderClassIdSelect() {
-      const previous = String(classIdSelect.value || '');
-      classIdSelect.innerHTML = '';
-      const placeholder = document.createElement('option');
-      placeholder.value = '';
-      placeholder.textContent = 'Sjálfvirkt val per keppni';
-      classIdSelect.appendChild(placeholder);
-
-      const orderedTypes = ['forkeppni', 'a-urslit', 'b-urslit'];
-      orderedTypes.forEach((competitionType) => {
-        const list = Array.isArray(classIdFromTests[competitionType])
-          ? classIdFromTests[competitionType]
-          : [];
-        list.forEach((item) => {
-          const option = document.createElement('option');
-          option.value = competitionType + ':' + item.classId;
-          const suffix = item.flokkurNafn
-            ? ' | ' + item.flokkurNafn + (item.keppnisgrein ? ' - ' + item.keppnisgrein : '')
-            : '';
-          option.textContent = competitionType + ' | ' + item.classId + suffix;
-          classIdSelect.appendChild(option);
-        });
-      });
-      if (previous && Array.from(classIdSelect.options).some((o) => o.value === previous)) {
-        classIdSelect.value = previous;
-      }
-    }
-    function renderClassIdState() {
-      if (!eventState) {
-        classIdState.textContent = 'classId state: engin gögn.';
-        return;
-      }
-      const selectedEventId = getSelectedEventId() || currentFilterValue;
-      if (!selectedEventId) {
-        classIdState.textContent = 'classId state: veldu mot til að sjá classId.';
-        return;
-      }
-      const competitions = [
-        { id: 1, label: 'forkeppni' },
-        { id: 2, label: 'a-urslit' },
-        { id: 3, label: 'b-urslit' },
-      ];
-      const rows = competitions.map((item) => {
-        const fromState = getStateClassIdForCompetition(item.label);
-        const fromTests = classIdFromTests[item.label]?.[0]?.classId;
-        if (fromState) {
-          return { label: item.label, value: String(fromState), source: 'state' };
-        }
-        if (Number.isInteger(fromTests) && fromTests > 0) {
-          return {
-            label: item.label,
-            value: String(fromTests),
-            source: 'sportfengur',
-          };
-        }
-        return { label: item.label, value: null, source: null };
-      });
-      classIdState.innerHTML =
-        '<div class="title">classId í state fyrir mót ' + selectedEventId + '</div>' +
-        '<div class="stategrid">' +
-        rows.map((row) => {
-          const valueHtml = row.value
-            ? '<span class="stateval">' + row.value + (row.source ? ' (' + row.source + ')' : '') + '</span>'
-            : '<span class="stateval missing">ekki til</span>';
-          return '<div class="statekey">' + row.label + '</div><div>' + valueHtml + '</div>';
-        }).join('') +
-        '</div>';
-    }
-    function hasManualContext() {
-      const selectedEventId = getSelectedEventId() || currentFilterValue;
-      if (!selectedEventId) return false;
-      const classId = Number.parseInt(String(classIdInput.value || '').trim(), 10);
-      return Number.isInteger(classId) && classId > 0;
-    }
-    function syncRefreshButtons() {
-      refreshButtons.forEach((btn) => {
-        const competitionType = btn.dataset.competitionType || '';
-        const hasCompetitionClassId =
-          getResolvedClassIdForCompetition(competitionType) != null;
-        btn.disabled = !hasCompetitionClassId || busy;
-      });
-    }
-    async function loadClassIdsFromTests() {
-      const selectedEventId = getSelectedEventId() || currentFilterValue;
-      classIdFromTests = {
-        forkeppni: [],
-        'a-urslit': [],
-        'b-urslit': [],
-      };
-      if (!selectedEventId) {
-        renderClassIdSelect();
-        renderClassIdState();
-        syncRefreshButtons();
-        return;
-      }
-      const r = await fetch('/event/' + selectedEventId + '/tests');
-      const data = await r.json();
-      if (!r.ok) {
-        renderClassIdState();
-        syncRefreshButtons();
-        return;
-      }
-      const tests = Array.isArray(data?.res) ? data.res : [];
-      for (const test of tests) {
-        const compId = Number.parseInt(String(test?.keppni_numer), 10);
-        const classId = Number.parseInt(String(test?.flokkar_numer), 10);
-        if (!Number.isInteger(compId) || !Number.isInteger(classId) || classId <= 0) {
-          continue;
-        }
-        const type = Object.keys(COMPETITION_TYPE_TO_ID).find(
-          (key) => COMPETITION_TYPE_TO_ID[key] === compId,
-        );
-        if (!type) continue;
-        const exists = classIdFromTests[type].some((item) => item.classId === classId);
-        if (!exists) {
-          classIdFromTests[type].push({
-            classId,
-            flokkurNafn: String(test?.flokkur_nafn || '').trim(),
-            keppnisgrein: String(test?.keppnisgrein || '').trim(),
-          });
-        }
-      }
-      renderClassIdSelect();
-      renderClassIdState();
-      syncRefreshButtons();
-    }
-    async function getEventState() {
-      const r = await fetch('/event/state');
-      eventState = await r.json();
-      renderClassIdState();
-      syncRefreshButtons();
-    }
-    async function getWebhookLog() {
-      const r = await fetch('/control/webhooks');
-      const data = await r.json();
-      if (!r.ok) {
-        webhookOut.textContent = JSON.stringify(data, null, 2);
-        return;
-      }
-      const items = Array.isArray(data?.items) ? data.items.slice(0, 20) : [];
-      if (items.length === 0) {
-        webhookOut.textContent = 'Engin webhook skilaboð ennþá.';
-        return;
-      }
-      webhookOut.textContent = items.map((item) => {
-        const at = item.at || '';
-        const status = item.status || '';
-        const eventName = item.eventName || '';
-        const eventId = item.eventId ?? '';
-        const classId = item.classId ?? '';
-        const competitionId = item.competitionId ?? '';
-        return at + ' | ' + status + ' | ' + eventName + ' | eventId=' + eventId + ' classId=' + classId + ' competitionId=' + competitionId;
-      }).join('\\n');
-    }
-    async function getEventFilter() {
-      setBusy(true);
       try {
-        const r = await fetch('/config/event-filter');
-        const data = await r.json();
-        setFilterStatus(data?.eventIdFilter);
-        upsertSelectedEventOption(data?.eventIdFilter);
-        show(data, r.ok);
-        await loadEventOptions();
-        await getEventState();
-        await loadClassIdsFromTests();
-        await getWebhookLog();
-      } finally {
-        setBusy(false);
-      }
-    }
-    async function setEventFilter() {
-      setBusy(true);
-      try {
-        const eventId = getSelectedEventId();
-        if (!eventId) {
-          show('Veldu mot fyrst.', false);
-          return;
+        if (resultEl) {
+          resultEl.className = '';
+          resultEl.textContent = 'Uppfæri ' + competitionType + '...';
         }
-        const r = await fetch('/config/event-filter', { method:'POST', headers: headers(), body: JSON.stringify({ eventIdFilter: eventId }) });
-        const data = await r.json();
-        setFilterStatus(data?.eventIdFilter);
-        upsertSelectedEventOption(data?.eventIdFilter);
-        show(data, r.ok);
-        await getEventState();
-        await loadClassIdsFromTests();
-        await getWebhookLog();
-      } finally {
-        setBusy(false);
-      }
-    }
-    async function clearEventFilter() {
-      setBusy(true);
-      try {
-        const r = await fetch('/config/event-filter', { method:'POST', headers: headers(), body: JSON.stringify({ eventIdFilter: null }) });
-        const data = await r.json();
-        setFilterStatus(data?.eventIdFilter);
-        eventSelect.value = '';
-        classIdFromTests = {
-          forkeppni: [],
-          'a-urslit': [],
-          'b-urslit': [],
-        };
-        renderClassIdSelect();
-        show(data, r.ok);
-        await getEventState();
-        renderClassIdState();
-        await getWebhookLog();
-      } finally {
-        setBusy(false);
-      }
-    }
-    async function refreshCompetition(competitionType) {
-      setBusy(true);
-      try {
-        const eventId = getSelectedEventId();
-        const body = {};
-        if (eventId) body.eventId = eventId;
-        const classId = getResolvedClassIdForCompetition(competitionType);
-        if (classId) {
-          body.classId = classId;
-        }
-        const r = await fetch('/event/' + competitionType + '/refresh', {
+        const r = await fetch('/event/' + eventId + '/' + competitionType + '/refresh', {
           method: 'POST',
           headers: headers(),
           body: JSON.stringify(body),
         });
         const data = await r.json();
-        if (!r.ok && data?.error === 'Missing classId (and no classId found in state)') {
-          show('Vantar classId i state fyrir valið mot/keppni. Biddu eftir webhook eða keyrdu raslista webhook fyrst.', false);
-          return;
+        if (resultEl) {
+          resultEl.className = r.ok ? 'ok' : 'warn';
+          resultEl.textContent = JSON.stringify(data, null, 2);
         }
-        show(data, r.ok);
-        await getEventState();
-        await getWebhookLog();
-      } finally {
-        setBusy(false);
+        // Reload state after refresh
+        loadEventTabState(eventId);
+      } catch (e) {
+        if (resultEl) {
+          resultEl.className = 'warn';
+          resultEl.textContent = 'Villa: ' + e.message;
+        }
       }
     }
-    eventSelect.addEventListener('change', syncRefreshButtons);
-    eventSelect.addEventListener('change', renderClassIdState);
-    eventSelect.addEventListener('change', renderEndpointButtons);
-    eventSelect.addEventListener('change', () => {
-      loadClassIdsFromTests().catch(() => {
-        classIdFromTests = {
-          forkeppni: [],
-          'a-urslit': [],
-          'b-urslit': [],
-        };
-        renderClassIdSelect();
-        renderClassIdState();
-        syncRefreshButtons();
-      });
+
+    // --- Webhook Log ---
+
+    async function getWebhookLog() {
+      const webhookOut = document.getElementById('webhookLog');
+      try {
+        const r = await fetch('/control/webhooks');
+        const data = await r.json();
+        if (!r.ok) {
+          webhookOut.textContent = JSON.stringify(data, null, 2);
+          return;
+        }
+        const items = Array.isArray(data?.items) ? data.items.slice(0, 20) : [];
+        if (items.length === 0) {
+          webhookOut.textContent = 'Engin webhook skilaboð ennþá.';
+          return;
+        }
+        webhookOut.textContent = items.map((item) => {
+          const at = item.at || '';
+          const status = item.status || '';
+          const eventName = item.eventName || '';
+          const eventId = item.eventId ?? '';
+          const classId = item.classId ?? '';
+          const competitionId = item.competitionId ?? '';
+          return at + ' | ' + status + ' | ' + eventName + ' | eventId=' + eventId + ' classId=' + classId + ' competitionId=' + competitionId;
+        }).join('\\n');
+      } catch (e) {
+        console.error('Failed to load webhook log:', e);
+      }
+    }
+
+    // --- Init ---
+
+    async function init() {
+      await loadEventSearchOptions();
+      await loadActiveEvents();
+      await getWebhookLog();
+      // Auto-select first tab if any
+      if (activeEvents.length > 0 && !activeTabId) {
+        selectTab(activeEvents[0].eventId);
+      }
+    }
+
+    document.getElementById('countrySelect').addEventListener('change', () => {
+      loadEventSearchOptions();
     });
-    countrySelect.addEventListener('change', () => {
-      loadEventOptions().catch((e) => show(String(e), false));
+
+    document.getElementById('addEventBtn').addEventListener('click', () => {
+      addEvent();
     });
-    classIdInput.addEventListener('input', syncRefreshButtons);
-    classIdSelect.addEventListener('change', syncRefreshButtons);
-    renderEndpointButtons();
-    syncRefreshButtons();
-    getEventFilter().catch((e) => show(String(e), false));
-    setInterval(() => {
-      getWebhookLog().catch(() => {});
-    }, 5000);
+
+    init().catch((e) => console.error('Init failed:', e));
+    setInterval(() => { getWebhookLog().catch(() => {}); }, 5000);
   </script>
 </body>
 </html>`;
 }
+
 
 export function registerVmixRoutes(app) {
   app.get('/control', (req, res) => {
@@ -858,11 +930,11 @@ export function registerVmixRoutes(app) {
     res.send(renderControlHtml());
   });
 
-  app.get('/event/current', (req, res) => {
+  app.get('/event/current', resolveLegacyEvent, (req, res) => {
     const currentState = getCurrentState();
     const search = req.query.search == null ? '' : String(req.query.search);
     const filtered = filterLeaderboardBySearch(currentState, search);
-    log.server.endpoint('/event/current', currentState.length);
+    log.server.endpoint('/event/current', filtered.length);
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/json');
     res.json(filtered);
@@ -880,6 +952,77 @@ export function registerVmixRoutes(app) {
         3: getCompetitionSpecificMetadata(3),
       },
     });
+  });
+
+  // --- Event Management API Routes ---
+
+  app.post('/events/register', (req, res) => {
+    if (!requireControlSession(req, res, true)) return;
+    const eventId = req.body?.eventId;
+    try {
+      const entry = registerEvent(eventId);
+      res.setHeader('Content-Type', 'application/json');
+      res.json({ ok: true, event: entry });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.delete('/events/:eventId', (req, res) => {
+    if (!requireControlSession(req, res, true)) return;
+    const eventId = Number(req.params.eventId);
+    if (!Number.isInteger(eventId) || eventId <= 0) {
+      return res
+        .status(400)
+        .json({ error: 'Invalid eventId: must be a positive integer' });
+    }
+    const removed = removeEvent(eventId);
+    if (!removed) {
+      return res
+        .status(404)
+        .json({ error: `Event ${eventId} is not registered` });
+    }
+    res.setHeader('Content-Type', 'application/json');
+    res.json({ ok: true, eventId });
+  });
+
+  app.get('/events', (req, res) => {
+    const events = getActiveEvents();
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json');
+    res.json({ events });
+  });
+
+  app.get('/events/state', (req, res) => {
+    const metadata = getAllEventsMetadata();
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json');
+    res.json(metadata);
+  });
+
+  app.get('/event/:eventId/state', (req, res) => {
+    const eventId = Number(req.params.eventId);
+    if (!Number.isInteger(eventId) || eventId <= 0) {
+      return res
+        .status(400)
+        .json({ error: 'Invalid eventId: must be a positive integer' });
+    }
+    if (!isEventActive(eventId)) {
+      return res.status(404).json({ error: `Event ${eventId} is not active` });
+    }
+    const state = getEventState(eventId);
+    const competitions = {};
+    if (state && state.competitions) {
+      for (const [compId, compState] of Object.entries(state.competitions)) {
+        competitions[compId] = {
+          classId: compState.classId,
+          leaderboardCount: compState.leaderboard.length,
+        };
+      }
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json');
+    res.json({ eventId, competitions });
   });
 
   const sendLeaderboardsZip = async (req, res) => {
@@ -924,10 +1067,331 @@ export function registerVmixRoutes(app) {
     res.send(archive);
   };
 
-  app.get('/event/leaderboards.zip', sendLeaderboardsZip);
-  app.get('/event/csv.zip', sendLeaderboardsZip);
+  app.get('/event/leaderboards.zip', resolveLegacyEvent, sendLeaderboardsZip);
+  app.get('/event/csv.zip', resolveLegacyEvent, sendLeaderboardsZip);
 
-  app.get('/event/:competitionType', (req, res) => {
+  // --- Multi-event routes: /event/:eventId/:competitionType ---
+
+  app.get('/event/:eventId/:competitionType/groups', (req, res) => {
+    const resolved = resolveMultiEventRequest(req, res);
+    if (!resolved) return;
+    const { eventId, competitionType, sort, sorted } = resolved;
+    const groupSize =
+      req.query.groupSize == null
+        ? 7
+        : Number.parseInt(req.query.groupSize, 10);
+    if (!Number.isInteger(groupSize) || groupSize <= 0 || groupSize > 50) {
+      return res
+        .status(400)
+        .json({ error: 'Invalid groupSize value', supported: '1-50' });
+    }
+    const vmixRows = sorted.map((entry) => ({
+      name: entry.Knapi || '',
+      horse: entry.Hestur || '',
+      Lid: entry.Lid || '',
+      Nr: entry.Nr || '',
+      saeti: entry.Saeti || '',
+      einkunn: entry.E6 || '',
+    }));
+    const groups = chunkEntries(vmixRows, groupSize);
+    log.server.endpoint(
+      `/event/${eventId}/${competitionType}/groups?sort=${sort}&groupSize=${groupSize}`,
+      sorted.length,
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json');
+    res.json(groups);
+  });
+
+  app.get('/event/:eventId/:competitionType/group', (req, res) => {
+    const resolved = resolveMultiEventRequest(req, res);
+    if (!resolved) return;
+    const { eventId, competitionType, sort, sorted } = resolved;
+    const groupSize =
+      req.query.groupSize == null
+        ? 7
+        : Number.parseInt(req.query.groupSize, 10);
+    if (!Number.isInteger(groupSize) || groupSize <= 0 || groupSize > 50) {
+      return res
+        .status(400)
+        .json({ error: 'Invalid groupSize value', supported: '1-50' });
+    }
+    const group =
+      req.query.group == null ? 1 : Number.parseInt(req.query.group, 10);
+    if (!Number.isInteger(group) || group <= 0) {
+      return res
+        .status(400)
+        .json({ error: 'Invalid group value', supported: '>= 1' });
+    }
+    const vmixRows = sorted.map((entry) => ({
+      name: entry.Knapi || '',
+      horse: entry.Hestur || '',
+      Lid: entry.Lid || '',
+      Nr: entry.Nr || '',
+      saeti: entry.Saeti || '',
+      einkunn: entry.E6 || '',
+    }));
+    const selectedGroup = chunkEntries(vmixRows, groupSize)[group - 1] || [];
+    log.server.endpoint(
+      `/event/${eventId}/${competitionType}/group?sort=${sort}&groupSize=${groupSize}&group=${group}`,
+      selectedGroup.length,
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json');
+    res.json(selectedGroup);
+  });
+
+  app.get('/event/:eventId/:competitionType/groups/flat', (req, res) => {
+    const resolved = resolveMultiEventRequest(req, res);
+    if (!resolved) return;
+    const { eventId, competitionType, sort, sorted } = resolved;
+    const groupSize =
+      req.query.groupSize == null
+        ? 7
+        : Number.parseInt(req.query.groupSize, 10);
+    if (!Number.isInteger(groupSize) || groupSize <= 0 || groupSize > 50) {
+      return res
+        .status(400)
+        .json({ error: 'Invalid groupSize value', supported: '1-50' });
+    }
+    const vmixRows = sorted.map((entry) => ({
+      name: entry.Knapi || '',
+      horse: entry.Hestur || '',
+      Lid: entry.Lid || '',
+      Nr: entry.Nr || '',
+      saeti: entry.Saeti || '',
+      einkunn: entry.E6 || '',
+    }));
+    const grouped = chunkEntries(vmixRows, groupSize);
+    const flattened = grouped.map((groupRows, groupIndex) => {
+      const row = { group: groupIndex + 1 };
+      for (let i = 0; i < groupSize; i += 1) {
+        const contestant = groupRows[i];
+        const n = i + 1;
+        row[`name${n}`] = contestant?.name || '';
+        row[`horse${n}`] = contestant?.horse || '';
+        row[`Lid${n}`] = contestant?.Lid || '';
+        row[`Nr${n}`] = contestant?.Nr || '';
+        row[`saeti${n}`] = contestant?.saeti || '';
+        row[`einkunn${n}`] = contestant?.einkunn || '';
+      }
+      return row;
+    });
+    log.server.endpoint(
+      `/event/${eventId}/${competitionType}/groups/flat?sort=${sort}&groupSize=${groupSize}`,
+      flattened.length,
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json');
+    res.json(flattened);
+  });
+
+  app.get('/event/:eventId/:competitionType/csv', (req, res) => {
+    const resolved = resolveMultiEventRequest(req, res);
+    if (!resolved) return;
+    const { eventId, competitionType, sort, sorted } = resolved;
+    const csv = withUtf8Bom(leaderboardToCsv(sorted));
+    log.server.endpoint(
+      `/event/${eventId}/${competitionType}/csv?sort=${sort}`,
+      sorted.length,
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${competitionType}-${eventId}-${sort}.csv"`,
+    );
+    res.send(csv);
+  });
+
+  app.get('/event/:eventId/:competitionType/results', (req, res) => {
+    const resolved = resolveMultiEventRequest(req, res, 'start');
+    if (!resolved) return;
+    const { eventId, competitionType, sort, sorted } = resolved;
+    const results = extractGangtegundResults(sorted, sort);
+    log.server.endpoint(
+      `/event/${eventId}/${competitionType}/results?sort=${sort}`,
+      results.length,
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json');
+    res.json(results);
+  });
+
+  app.post('/event/:eventId/:competitionType/refresh', async (req, res) => {
+    if (!requireControlSession(req, res, true)) return;
+
+    const eventId = validateEventId(req, res);
+    if (eventId === null) return;
+
+    const scope = validateCompetitionType(req, res);
+    if (!scope) return;
+    const { competitionType, competitionId } = scope;
+
+    // Check if refresh already in progress
+    if (isRefreshInProgress(eventId, competitionId)) {
+      return res.status(409).json({
+        error: 'Refresh already in progress',
+        eventId,
+        competitionType,
+      });
+    }
+
+    const bodyClassId =
+      req.body?.classId == null ? null : parsePositiveInt(req.body.classId);
+
+    // Try to get classId from event state if not provided in body
+    const eventState = getEventState(eventId);
+    const stateClassId =
+      eventState?.competitions?.[competitionId]?.classId || null;
+    const classId = bodyClassId ?? stateClassId;
+
+    if (!classId) {
+      return res
+        .status(400)
+        .json({ error: 'Missing classId (and no classId found in state)' });
+    }
+
+    try {
+      const valid = await classBelongsToEventCompetition(
+        eventId,
+        classId,
+        competitionId,
+      );
+      if (!valid) {
+        return res.status(400).json({
+          error: 'Class does not belong to selected event/competition',
+          eventId,
+          classId,
+          competitionType,
+        });
+      }
+
+      await refreshCompetitionNow(eventId, classId, competitionId, true);
+      const total = getLeaderboardForEvent(eventId, competitionId).length;
+      res.json({
+        ok: true,
+        eventId,
+        classId,
+        competitionType,
+        competitionId,
+        total,
+      });
+    } catch (error) {
+      res.status(error.status || 500).json({
+        error: 'Manual refresh failed',
+        message: error.message,
+      });
+    }
+  });
+
+  // --- Multi-event ZIP routes ---
+
+  const sendEventLeaderboardsZip = async (req, res) => {
+    const raw = req.params.eventId;
+    const eventId = Number.parseInt(String(raw), 10);
+    if (
+      !Number.isInteger(eventId) ||
+      eventId <= 0 ||
+      String(eventId) !== String(raw)
+    ) {
+      return res
+        .status(400)
+        .json({ error: 'Invalid eventId: must be a positive integer' });
+    }
+    if (!isEventActive(eventId)) {
+      return res.status(404).json({ error: `Event ${eventId} is not active` });
+    }
+
+    const zip = new JSZip();
+
+    for (const [competitionType, competitionId] of Object.entries(
+      COMPETITION_TYPE_TO_ID,
+    )) {
+      const leaderboard = getLeaderboardForEvent(eventId, competitionId);
+      const startRows = sortLeaderboard(leaderboard, 'start');
+      const rankRows = sortLeaderboard(leaderboard, 'rank');
+      zip.file(
+        `${competitionType}-${eventId}-start.csv`,
+        withUtf8Bom(leaderboardToCsv(startRows)),
+      );
+      zip.file(
+        `${competitionType}-${eventId}-rank.csv`,
+        withUtf8Bom(leaderboardToCsv(rankRows)),
+      );
+    }
+
+    const archive = await zip.generateAsync({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 },
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="leaderboards-${eventId}.zip"`,
+    );
+    res.send(archive);
+  };
+
+  app.get('/event/:eventId/leaderboards.zip', sendEventLeaderboardsZip);
+  app.get('/event/:eventId/csv.zip', sendEventLeaderboardsZip);
+
+  // --- Sportfengur proxy routes (must be before generic :competitionType catch-all) ---
+
+  app.get('/event/:eventId/participants', async (req, res) => {
+    try {
+      const eventId = req.params.eventId;
+
+      if (!eventId || isNaN(eventId)) {
+        return res.status(400).json({ error: 'Invalid event ID' });
+      }
+
+      const data = await apiGetWithRetry(
+        `/${SPORTFENGUR_LOCALE}/participants/${eventId}`,
+      );
+
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.setHeader('Content-Type', 'application/json');
+      res.json(data);
+    } catch (error) {
+      console.error(`[vMix Server] Error fetching participants:`, error);
+      res.status(error.status || 500).json({
+        error: 'Failed to fetch participants',
+        message: error.message,
+      });
+    }
+  });
+
+  app.get('/event/:eventId/tests', async (req, res) => {
+    try {
+      const eventId = req.params.eventId;
+
+      if (!eventId || isNaN(eventId)) {
+        return res.status(400).json({ error: 'Invalid event ID' });
+      }
+
+      const data = await apiGetWithRetry(
+        `/${SPORTFENGUR_LOCALE}/event/tests/${eventId}`,
+      );
+
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.setHeader('Content-Type', 'application/json');
+      res.json(data);
+    } catch (error) {
+      console.error(`[vMix Server] Error fetching event tests:`, error);
+      res.status(error.status || 500).json({
+        error: 'Failed to fetch event tests',
+        message: error.message,
+      });
+    }
+  });
+
+  // --- Legacy routes (single-event, backward compatible) ---
+
+  app.get('/event/:competitionType', resolveLegacyEvent, (req, res) => {
     const resolved = resolveCompetitionRequest(req, res);
     if (!resolved) return;
     const { competitionType, sort, sorted } = resolved;
@@ -940,7 +1404,7 @@ export function registerVmixRoutes(app) {
     res.json(sorted);
   });
 
-  app.get('/event/:competitionType/groups', (req, res) => {
+  app.get('/event/:competitionType/groups', resolveLegacyEvent, (req, res) => {
     const resolved = resolveCompetitionRequest(req, res);
     if (!resolved) return;
     const { competitionType, sort, sorted } = resolved;
@@ -971,7 +1435,7 @@ export function registerVmixRoutes(app) {
     res.json(groups);
   });
 
-  app.get('/event/:competitionType/group', (req, res) => {
+  app.get('/event/:competitionType/group', resolveLegacyEvent, (req, res) => {
     const resolved = resolveCompetitionRequest(req, res);
     if (!resolved) return;
     const { competitionType, sort, sorted } = resolved;
@@ -1009,52 +1473,56 @@ export function registerVmixRoutes(app) {
     res.json(selectedGroup);
   });
 
-  app.get('/event/:competitionType/groups/flat', (req, res) => {
-    const resolved = resolveCompetitionRequest(req, res);
-    if (!resolved) return;
-    const { competitionType, sort, sorted } = resolved;
-    const groupSize =
-      req.query.groupSize == null
-        ? 7
-        : Number.parseInt(req.query.groupSize, 10);
-    if (!Number.isInteger(groupSize) || groupSize <= 0 || groupSize > 50) {
-      return res
-        .status(400)
-        .json({ error: 'Invalid groupSize value', supported: '1-50' });
-    }
-    const vmixRows = sorted.map((entry) => ({
-      name: entry.Knapi || '',
-      horse: entry.Hestur || '',
-      Lid: entry.Lid || '',
-      Nr: entry.Nr || '',
-      saeti: entry.Saeti || '',
-      einkunn: entry.E6 || '',
-    }));
-    const grouped = chunkEntries(vmixRows, groupSize);
-    const flattened = grouped.map((groupRows, groupIndex) => {
-      const row = { group: groupIndex + 1 };
-      for (let i = 0; i < groupSize; i += 1) {
-        const contestant = groupRows[i];
-        const n = i + 1;
-        row[`name${n}`] = contestant?.name || '';
-        row[`horse${n}`] = contestant?.horse || '';
-        row[`Lid${n}`] = contestant?.Lid || '';
-        row[`Nr${n}`] = contestant?.Nr || '';
-        row[`saeti${n}`] = contestant?.saeti || '';
-        row[`einkunn${n}`] = contestant?.einkunn || '';
+  app.get(
+    '/event/:competitionType/groups/flat',
+    resolveLegacyEvent,
+    (req, res) => {
+      const resolved = resolveCompetitionRequest(req, res);
+      if (!resolved) return;
+      const { competitionType, sort, sorted } = resolved;
+      const groupSize =
+        req.query.groupSize == null
+          ? 7
+          : Number.parseInt(req.query.groupSize, 10);
+      if (!Number.isInteger(groupSize) || groupSize <= 0 || groupSize > 50) {
+        return res
+          .status(400)
+          .json({ error: 'Invalid groupSize value', supported: '1-50' });
       }
-      return row;
-    });
-    log.server.endpoint(
-      `/event/${competitionType}/groups/flat?sort=${sort}&groupSize=${groupSize}`,
-      flattened.length,
-    );
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Type', 'application/json');
-    res.json(flattened);
-  });
+      const vmixRows = sorted.map((entry) => ({
+        name: entry.Knapi || '',
+        horse: entry.Hestur || '',
+        Lid: entry.Lid || '',
+        Nr: entry.Nr || '',
+        saeti: entry.Saeti || '',
+        einkunn: entry.E6 || '',
+      }));
+      const grouped = chunkEntries(vmixRows, groupSize);
+      const flattened = grouped.map((groupRows, groupIndex) => {
+        const row = { group: groupIndex + 1 };
+        for (let i = 0; i < groupSize; i += 1) {
+          const contestant = groupRows[i];
+          const n = i + 1;
+          row[`name${n}`] = contestant?.name || '';
+          row[`horse${n}`] = contestant?.horse || '';
+          row[`Lid${n}`] = contestant?.Lid || '';
+          row[`Nr${n}`] = contestant?.Nr || '';
+          row[`saeti${n}`] = contestant?.saeti || '';
+          row[`einkunn${n}`] = contestant?.einkunn || '';
+        }
+        return row;
+      });
+      log.server.endpoint(
+        `/event/${competitionType}/groups/flat?sort=${sort}&groupSize=${groupSize}`,
+        flattened.length,
+      );
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Type', 'application/json');
+      res.json(flattened);
+    },
+  );
 
-  app.get('/event/:competitionType/csv', (req, res) => {
+  app.get('/event/:competitionType/csv', resolveLegacyEvent, (req, res) => {
     const resolved = resolveCompetitionRequest(req, res);
     if (!resolved) return;
     const { competitionType, sort, sorted, competitionId } = resolved;
@@ -1075,7 +1543,7 @@ export function registerVmixRoutes(app) {
     res.send(csv);
   });
 
-  app.get('/event/:competitionType/results', (req, res) => {
+  app.get('/event/:competitionType/results', resolveLegacyEvent, (req, res) => {
     const resolved = resolveCompetitionRequest(req, res, 'start');
     if (!resolved) return;
     const { competitionType, sort, sorted } = resolved;
@@ -1151,54 +1619,6 @@ export function registerVmixRoutes(app) {
     } catch (error) {
       res.status(error.status || 500).json({
         error: 'Manual refresh failed',
-        message: error.message,
-      });
-    }
-  });
-
-  app.get('/event/:eventId/participants', async (req, res) => {
-    try {
-      const eventId = req.params.eventId;
-
-      if (!eventId || isNaN(eventId)) {
-        return res.status(400).json({ error: 'Invalid event ID' });
-      }
-
-      const data = await apiGetWithRetry(
-        `/${SPORTFENGUR_LOCALE}/participants/${eventId}`,
-      );
-
-      res.setHeader('Cache-Control', 'public, max-age=300');
-      res.setHeader('Content-Type', 'application/json');
-      res.json(data);
-    } catch (error) {
-      console.error(`[vMix Server] Error fetching participants:`, error);
-      res.status(error.status || 500).json({
-        error: 'Failed to fetch participants',
-        message: error.message,
-      });
-    }
-  });
-
-  app.get('/event/:eventId/tests', async (req, res) => {
-    try {
-      const eventId = req.params.eventId;
-
-      if (!eventId || isNaN(eventId)) {
-        return res.status(400).json({ error: 'Invalid event ID' });
-      }
-
-      const data = await apiGetWithRetry(
-        `/${SPORTFENGUR_LOCALE}/event/tests/${eventId}`,
-      );
-
-      res.setHeader('Cache-Control', 'public, max-age=300');
-      res.setHeader('Content-Type', 'application/json');
-      res.json(data);
-    } catch (error) {
-      console.error(`[vMix Server] Error fetching event tests:`, error);
-      res.status(error.status || 500).json({
-        error: 'Failed to fetch event tests',
         message: error.message,
       });
     }
@@ -1312,5 +1732,70 @@ export function registerVmixRoutes(app) {
         message: error.message,
       });
     }
+  });
+
+  // --- Sportfengur proxy routes (must be before generic :eventId/:competitionType catch-all) ---
+
+  app.get('/event/:eventId/participants', async (req, res) => {
+    try {
+      const eventId = req.params.eventId;
+
+      if (!eventId || isNaN(eventId)) {
+        return res.status(400).json({ error: 'Invalid event ID' });
+      }
+
+      const data = await apiGetWithRetry(
+        `/${SPORTFENGUR_LOCALE}/participants/${eventId}`,
+      );
+
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.setHeader('Content-Type', 'application/json');
+      res.json(data);
+    } catch (error) {
+      console.error(`[vMix Server] Error fetching participants:`, error);
+      res.status(error.status || 500).json({
+        error: 'Failed to fetch participants',
+        message: error.message,
+      });
+    }
+  });
+
+  app.get('/event/:eventId/tests', async (req, res) => {
+    try {
+      const eventId = req.params.eventId;
+
+      if (!eventId || isNaN(eventId)) {
+        return res.status(400).json({ error: 'Invalid event ID' });
+      }
+
+      const data = await apiGetWithRetry(
+        `/${SPORTFENGUR_LOCALE}/event/tests/${eventId}`,
+      );
+
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.setHeader('Content-Type', 'application/json');
+      res.json(data);
+    } catch (error) {
+      console.error(`[vMix Server] Error fetching event tests:`, error);
+      res.status(error.status || 500).json({
+        error: 'Failed to fetch event tests',
+        message: error.message,
+      });
+    }
+  });
+
+  // --- Multi-event JSON leaderboard (catch-all, must be last /event/:x/:y route) ---
+
+  app.get('/event/:eventId/:competitionType', (req, res) => {
+    const resolved = resolveMultiEventRequest(req, res);
+    if (!resolved) return;
+    const { eventId, competitionType, sort, sorted } = resolved;
+    log.server.endpoint(
+      `/event/${eventId}/${competitionType}?sort=${sort}`,
+      sorted.length,
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json');
+    res.json(sorted);
   });
 }

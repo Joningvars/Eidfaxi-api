@@ -6,8 +6,9 @@ import {
   setEventIdFilter,
 } from './config.js';
 import { apiGetWithRetry } from './sportfengur.js';
-import { scheduleRefresh, setCompetitionContext } from './vmix/refresh.js';
+import { scheduleRefreshForEvent } from './vmix/refresh.js';
 import { getCompetitionMetadata } from './vmix/state.js';
+import { isEventActive, getEventCount } from './vmix/event-registry.js';
 import { clearStartingListCache } from './vmix/vendor.js';
 import { log } from './logger.js';
 import { requireControlSession } from './control-auth.js';
@@ -99,11 +100,15 @@ function dedupeKey(eventName, payload) {
 }
 
 function isAllowedEventId(payload) {
-  const eventIdFilter = getEventIdFilter();
-  if (eventIdFilter == null) {
-    return true;
+  // When no events are registered, discard all webhooks
+  if (getEventCount() === 0) {
+    return false;
   }
-  return Number(payload.eventId) === eventIdFilter;
+  const eventId = Number(payload.eventId);
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return false;
+  }
+  return isEventActive(eventId);
 }
 
 function isAllowedClassId(payload) {
@@ -191,7 +196,7 @@ async function handleWebhook(req, res, eventName) {
     log.webhook.processing(eventName);
 
     if (!isAllowedEventId(payload)) {
-      log.webhook.filtered(payload.eventId ?? 'N/A', getEventIdFilter());
+      log.webhook.filtered(payload.eventId ?? 'N/A', 'not active');
       pushWebhookHistory({
         status: 'filtered',
         eventName,
@@ -227,14 +232,14 @@ async function handleWebhook(req, res, eventName) {
         eventName === 'event_raslisti_birtur' ||
         eventName === 'event_naesti_sprettur';
 
-      setCompetitionContext(
-        payload.eventId,
-        payload.classId,
-        resolvedCompetitionId,
-        forceRefresh,
-      );
+      // Schedule per-event refresh via the multi-event refresh engine
       try {
-        scheduleRefresh();
+        scheduleRefreshForEvent(
+          Number(payload.eventId),
+          Number(payload.classId),
+          Number(resolvedCompetitionId),
+          forceRefresh,
+        );
         log.vmix.scheduled(
           payload.eventId,
           payload.classId,
