@@ -736,9 +736,9 @@ function renderControlHtml() {
         + '<label>ClassId (valfrjálst handvirkt)</label>'
         + '<input id="classIdInput-' + eventId + '" type="number" placeholder="T.d. 203060" />'
         + '<div class="three">'
-        + '<button class="primary" onclick="refreshEventCompetition(' + eventId + ', \'forkeppni\')">Uppfæra forkeppni</button>'
-        + '<button class="primary" onclick="refreshEventCompetition(' + eventId + ', \'a-urslit\')">Uppfæra a-úrslit</button>'
-        + '<button class="primary" onclick="refreshEventCompetition(' + eventId + ', \'b-urslit\')">Uppfæra b-úrslit</button>'
+        + '<button class="primary" onclick="refreshEventCompetition(' + eventId + ', &quot;forkeppni&quot;)">Uppfæra forkeppni</button>'
+        + '<button class="primary" onclick="refreshEventCompetition(' + eventId + ', &quot;a-urslit&quot;)">Uppfæra a-úrslit</button>'
+        + '<button class="primary" onclick="refreshEventCompetition(' + eventId + ', &quot;b-urslit&quot;)">Uppfæra b-úrslit</button>'
         + '</div>'
         + '<h2 style="margin-top:14px">Niðurstaða</h2>'
         + '<pre id="result-' + eventId + '"></pre>'
@@ -920,7 +920,6 @@ function renderControlHtml() {
 </body>
 </html>`;
 }
-
 
 export function registerVmixRoutes(app) {
   app.get('/control', (req, res) => {
