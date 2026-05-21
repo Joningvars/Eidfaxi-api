@@ -23,6 +23,8 @@ import {
   getActiveEvents,
   isEventActive,
   getDefaultEventId,
+  resolveEventId,
+  getActiveEventsWithSlots,
 } from './event-registry.js';
 import { log } from '../logger.js';
 import JSZip from 'jszip';
@@ -288,8 +290,8 @@ export function resolveLegacyEvent(req, res, next) {
 }
 
 /**
- * Validate eventId param: must be a positive integer and present in the registry.
- * Returns the parsed eventId or null (after sending an error response).
+ * Validate eventId param: must be a positive integer and resolvable (either real eventId or slot 1-10).
+ * Returns the resolved real eventId or null (after sending an error response).
  */
 function validateEventId(req, res) {
   const raw = req.params.eventId;
@@ -304,11 +306,14 @@ function validateEventId(req, res) {
       .json({ error: 'Invalid eventId: must be a positive integer' });
     return null;
   }
-  if (!isEventActive(parsed)) {
-    res.status(404).json({ error: `Event ${parsed} is not active` });
+  const resolved = resolveEventId(parsed);
+  if (!resolved) {
+    res.status(404).json({
+      error: `Event ${parsed} is not active (checked as eventId and slot number)`,
+    });
     return null;
   }
-  return parsed;
+  return resolved;
 }
 
 /**
@@ -1021,7 +1026,7 @@ export function registerVmixRoutes(app) {
   });
 
   app.get('/events', (req, res) => {
-    const events = getActiveEvents();
+    const events = getActiveEventsWithSlots();
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/json');
     res.json({ events });
