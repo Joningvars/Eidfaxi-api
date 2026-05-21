@@ -609,19 +609,19 @@ function renderControlHtml() {
         return;
       }
       try {
+        // Get event name from dropdown
+        const selectedOption = eventSearchSelect.options[eventSearchSelect.selectedIndex];
+        const eventName = selectedOption?.dataset?.eventName || '';
         const r = await fetch('/events/register', {
           method: 'POST',
           headers: headers(),
-          body: JSON.stringify({ eventId }),
+          body: JSON.stringify({ eventId, name: eventName }),
         });
         const data = await r.json();
         if (!r.ok) {
           alert(data?.error || 'Villa við skráningu móts');
           return;
         }
-        // Get event name from dropdown
-        const selectedOption = eventSearchSelect.options[eventSearchSelect.selectedIndex];
-        const eventName = selectedOption?.dataset?.eventName || '';
         const newEvent = { eventId, name: eventName, addedAt: data?.event?.addedAt || new Date().toISOString() };
         if (!activeEvents.some((e) => e.eventId === eventId)) {
           activeEvents.push(newEvent);
@@ -958,8 +958,9 @@ export function registerVmixRoutes(app) {
   app.post('/events/register', (req, res) => {
     if (!requireControlSession(req, res, true)) return;
     const eventId = req.body?.eventId;
+    const name = req.body?.name || '';
     try {
-      const entry = registerEvent(eventId);
+      const entry = registerEvent(eventId, name);
       res.setHeader('Content-Type', 'application/json');
       res.json({ ok: true, event: entry });
     } catch (error) {
