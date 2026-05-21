@@ -18,10 +18,11 @@ const activeEvents = new Map();
  * and ignores duplicates (returns existing entry).
  *
  * @param {number} eventId - Positive integer event identifier
- * @returns {{ eventId: number, addedAt: string }} The registered event entry
+ * @param {string} [name] - Optional event name for display purposes
+ * @returns {{ eventId: number, addedAt: string, name: string }} The registered event entry
  * @throws {Error} If eventId is invalid or registry is at capacity
  */
-export function registerEvent(eventId) {
+export function registerEvent(eventId, name) {
   const parsed = Number(eventId);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(
@@ -29,9 +30,13 @@ export function registerEvent(eventId) {
     );
   }
 
-  // Idempotent: return existing entry if already registered
+  // Idempotent: return existing entry (update name if provided)
   if (activeEvents.has(parsed)) {
-    return activeEvents.get(parsed);
+    const existing = activeEvents.get(parsed);
+    if (name && !existing.name) {
+      existing.name = String(name);
+    }
+    return existing;
   }
 
   if (activeEvents.size >= MAX_ACTIVE_EVENTS) {
@@ -40,7 +45,11 @@ export function registerEvent(eventId) {
     );
   }
 
-  const entry = { eventId: parsed, addedAt: new Date().toISOString() };
+  const entry = {
+    eventId: parsed,
+    addedAt: new Date().toISOString(),
+    name: name ? String(name) : '',
+  };
   activeEvents.set(parsed, entry);
   initializeEventState(parsed);
   return entry;

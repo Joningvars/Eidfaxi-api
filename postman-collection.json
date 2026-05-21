@@ -1,0 +1,558 @@
+{
+  "info": {
+    "name": "Eidfaxi API - Multi-Event",
+    "_postman_id": "eidfaxi-multi-event-2026",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Eidfaxi API endpoints for multi-event routing."
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://eidfaxi-api-production.up.railway.app",
+      "type": "string"
+    },
+    {
+      "key": "webhook_secret",
+      "value": "YOUR_WEBHOOK_SECRET",
+      "type": "string"
+    },
+    { "key": "event_id_1", "value": "72956", "type": "string" },
+    { "key": "event_id_2", "value": "74055", "type": "string" },
+    { "key": "class_id_1", "value": "203060", "type": "string" },
+    { "key": "class_id_2", "value": "", "type": "string" },
+    { "key": "competition_id", "value": "1", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Event Management",
+      "item": [
+        {
+          "name": "List Active Events",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/events",
+              "host": ["{{base_url}}"],
+              "path": ["events"]
+            }
+          }
+        },
+        {
+          "name": "Register Event 1",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": {{event_id_1}}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/events/register",
+              "host": ["{{base_url}}"],
+              "path": ["events", "register"]
+            }
+          }
+        },
+        {
+          "name": "Register Event 2",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": {{event_id_2}}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/events/register",
+              "host": ["{{base_url}}"],
+              "path": ["events", "register"]
+            }
+          }
+        },
+        {
+          "name": "Remove Event",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/events/{{event_id_1}}",
+              "host": ["{{base_url}}"],
+              "path": ["events", "{{event_id_1}}"]
+            }
+          }
+        },
+        {
+          "name": "All Events State",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/events/state",
+              "host": ["{{base_url}}"],
+              "path": ["events", "state"]
+            }
+          }
+        },
+        {
+          "name": "Single Event State",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/state",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "state"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Simulate Webhooks",
+      "item": [
+        {
+          "name": "event_einkunn_saeti (score update - event 1)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-webhook-secret", "value": "{{webhook_secret}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": {{event_id_1}},\n  \"classId\": {{class_id_1}},\n  \"competitionId\": {{competition_id}}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/event_einkunn_saeti",
+              "host": ["{{base_url}}"],
+              "path": ["event_einkunn_saeti"]
+            }
+          }
+        },
+        {
+          "name": "event_einkunn_saeti (score update - event 2)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-webhook-secret", "value": "{{webhook_secret}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": {{event_id_2}},\n  \"classId\": {{class_id_2}},\n  \"competitionId\": {{competition_id}}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/event_einkunn_saeti",
+              "host": ["{{base_url}}"],
+              "path": ["event_einkunn_saeti"]
+            }
+          }
+        },
+        {
+          "name": "event_raslisti_birtur (starting list)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-webhook-secret", "value": "{{webhook_secret}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": {{event_id_1}},\n  \"classId\": {{class_id_1}},\n  \"published\": 1\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/event_raslisti_birtur",
+              "host": ["{{base_url}}"],
+              "path": ["event_raslisti_birtur"]
+            }
+          }
+        },
+        {
+          "name": "event_naesti_sprettur (next sprint)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-webhook-secret", "value": "{{webhook_secret}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": {{event_id_1}},\n  \"classId\": {{class_id_1}},\n  \"competitionId\": {{competition_id}}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/event_naesti_sprettur",
+              "host": ["{{base_url}}"],
+              "path": ["event_naesti_sprettur"]
+            }
+          }
+        },
+        {
+          "name": "event_mot_skra (event registration)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-webhook-secret", "value": "{{webhook_secret}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": {{event_id_1}}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/event_mot_skra",
+              "host": ["{{base_url}}"],
+              "path": ["event_mot_skra"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "vMix Data - Event 1",
+      "item": [
+        {
+          "name": "Forkeppni JSON",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/forkeppni",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "forkeppni"]
+            }
+          }
+        },
+        {
+          "name": "Forkeppni CSV",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/forkeppni/csv",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "forkeppni", "csv"]
+            }
+          }
+        },
+        {
+          "name": "Forkeppni Ranked",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/forkeppni?sort=rank",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "forkeppni"],
+              "query": [{ "key": "sort", "value": "rank" }]
+            }
+          }
+        },
+        {
+          "name": "Forkeppni Groups",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/forkeppni/groups?groupSize=7",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "forkeppni", "groups"],
+              "query": [{ "key": "groupSize", "value": "7" }]
+            }
+          }
+        },
+        {
+          "name": "Forkeppni Results",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/forkeppni/results",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "forkeppni", "results"]
+            }
+          }
+        },
+        {
+          "name": "A-urslit JSON",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/a-urslit",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "a-urslit"]
+            }
+          }
+        },
+        {
+          "name": "A-urslit CSV",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/a-urslit/csv",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "a-urslit", "csv"]
+            }
+          }
+        },
+        {
+          "name": "B-urslit JSON",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/b-urslit",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "b-urslit"]
+            }
+          }
+        },
+        {
+          "name": "B-urslit CSV",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/b-urslit/csv",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "b-urslit", "csv"]
+            }
+          }
+        },
+        {
+          "name": "Leaderboards ZIP",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/leaderboards.zip",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "leaderboards.zip"]
+            }
+          }
+        },
+        {
+          "name": "Refresh Forkeppni",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"classId\": {{class_id_1}}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/forkeppni/refresh",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "forkeppni", "refresh"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "vMix Data - Event 2",
+      "item": [
+        {
+          "name": "Forkeppni JSON",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_2}}/forkeppni",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_2}}", "forkeppni"]
+            }
+          }
+        },
+        {
+          "name": "Forkeppni CSV",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_2}}/forkeppni/csv",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_2}}", "forkeppni", "csv"]
+            }
+          }
+        },
+        {
+          "name": "A-urslit JSON",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_2}}/a-urslit",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_2}}", "a-urslit"]
+            }
+          }
+        },
+        {
+          "name": "A-urslit CSV",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_2}}/a-urslit/csv",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_2}}", "a-urslit", "csv"]
+            }
+          }
+        },
+        {
+          "name": "B-urslit JSON",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_2}}/b-urslit",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_2}}", "b-urslit"]
+            }
+          }
+        },
+        {
+          "name": "B-urslit CSV",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_2}}/b-urslit/csv",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_2}}", "b-urslit", "csv"]
+            }
+          }
+        },
+        {
+          "name": "Leaderboards ZIP",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_2}}/leaderboards.zip",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_2}}", "leaderboards.zip"]
+            }
+          }
+        },
+        {
+          "name": "Refresh Forkeppni",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"classId\": {{class_id_2}}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_2}}/forkeppni/refresh",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_2}}", "forkeppni", "refresh"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sportfengur Proxy",
+      "item": [
+        {
+          "name": "Event Tests (get classIds)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/tests",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "tests"]
+            }
+          }
+        },
+        {
+          "name": "Event 2 Tests (get classIds)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_2}}/tests",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_2}}", "tests"]
+            }
+          }
+        },
+        {
+          "name": "Event Participants",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/event/{{event_id_1}}/participants",
+              "host": ["{{base_url}}"],
+              "path": ["event", "{{event_id_1}}", "participants"]
+            }
+          }
+        },
+        {
+          "name": "Search Events (Iceland 2026)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/events/search?ar=2026&land=IS",
+              "host": ["{{base_url}}"],
+              "path": ["events", "search"],
+              "query": [
+                { "key": "ar", "value": "2026" },
+                { "key": "land", "value": "IS" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "System",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "Webhook History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/control/webhooks",
+              "host": ["{{base_url}}"],
+              "path": ["control", "webhooks"]
+            }
+          }
+        },
+        {
+          "name": "Get Event Filter",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/config/event-filter",
+              "host": ["{{base_url}}"],
+              "path": ["config", "event-filter"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
