@@ -186,6 +186,35 @@ export function updateEventLabel(eventId, label) {
 }
 
 /**
+ * Set the allowed classId for gating webhooks on a specific event.
+ * Only webhooks matching this classId will trigger a refresh for this event.
+ * Set to null to allow all classIds.
+ *
+ * @param {number} eventId
+ * @param {number|null} classId
+ * @returns {boolean}
+ */
+export function setEventClassIdGate(eventId, classId) {
+  const parsed = Number(eventId);
+  if (!activeEvents.has(parsed)) return false;
+  activeEvents.get(parsed).allowedClassId =
+    classId === null ? null : Number(classId);
+  return true;
+}
+
+/**
+ * Get the allowed classId gate for a specific event.
+ *
+ * @param {number} eventId
+ * @returns {number|null}
+ */
+export function getEventClassIdGate(eventId) {
+  const parsed = Number(eventId);
+  if (!activeEvents.has(parsed)) return null;
+  return activeEvents.get(parsed).allowedClassId ?? null;
+}
+
+/**
  * Replace the event on a slot with a new event, keeping the slot position and label.
  * Cleans up old event state and initializes new event state.
  *

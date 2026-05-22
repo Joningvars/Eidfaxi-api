@@ -8,7 +8,11 @@ import {
 import { apiGetWithRetry } from './sportfengur.js';
 import { scheduleRefreshForEvent } from './vmix/refresh.js';
 import { getCompetitionMetadata } from './vmix/state.js';
-import { isEventActive, getEventCount } from './vmix/event-registry.js';
+import {
+  isEventActive,
+  getEventCount,
+  getEventClassIdGate,
+} from './vmix/event-registry.js';
 import { clearStartingListCache } from './vmix/vendor.js';
 import { log } from './logger.js';
 import { requireControlSession } from './control-auth.js';
@@ -112,21 +116,22 @@ function isAllowedEventId(payload) {
 }
 
 function isAllowedClassId(payload) {
-  // In multi-event mode, don't filter by classId — the eventId filter is sufficient
-  if (getEventCount() > 1) {
-    return true;
-  }
-  const { classId: currentClassId } = getCompetitionMetadata();
-  // Fresh startup — no class selected yet, allow all webhooks through
-  if (currentClassId == null) {
-    return true;
-  }
   // Event has no classId in payload (e.g., event_keppendalisti_breyta) — allow through
   if (payload.classId == null) {
     return true;
   }
-  // Only allow if classId matches the currently active class
-  return Number(payload.classId) === Number(currentClassId);
+
+  const eventId = Number(payload.eventId);
+
+  // Check per-event classId gate
+  const gate = getEventClassIdGate(eventId);
+  if (gate === null) {
+    // No gate set for this event — allow all classIds through
+    return true;
+  }
+
+  // Only allow if classId matches the gate
+  return Number(payload.classId) === gate;
 }
 
 async function resolveCompetitionId(payload) {
