@@ -27,6 +27,8 @@ import {
   getActiveEventsWithSlots,
   updateEventLabel,
   replaceEvent,
+  setEventClassIdGate,
+  getEventClassIdGate,
 } from './event-registry.js';
 import { log } from '../logger.js';
 import JSZip from 'jszip';
@@ -753,6 +755,11 @@ function renderControlHtml() {
         + '<button class="secondary" style="width:auto;padding:10px 16px" onclick="swapEvent(' + eventId + ')">Skipta</button>'
         + '</div>'
         + '<div id="classIdState-' + eventId + '" class="statebox">classId state: hleð...</div>'
+        + '<div style="display:flex;gap:8px;align-items:end;margin-bottom:10px;margin-top:10px">'
+        + '<div style="flex:1"><label>ClassId gating (aðeins þetta classId uppfærir gögn)</label>'
+        + '<select id="gateSelect-' + eventId + '"><option value="">Allt leyft (ekkert gate)</option></select></div>'
+        + '<button class="secondary" style="width:auto;padding:10px 16px" onclick="setGate(' + eventId + ')">Setja gate</button>'
+        + '</div>'
         + '<label>ClassId (valfrjálst handvirkt)</label>'
         + '<input id="classIdInput-' + eventId + '" type="number" placeholder="T.d. 203060" />'
         + '<div class="three">'
@@ -784,6 +791,7 @@ function renderControlHtml() {
         renderEventClassIdState(eventId, data);
         renderEventEndpoints(eventId);
         populateSwapSelects();
+        loadGateOptions(eventId);
       } catch (e) {
         console.error('Failed to load state for event', eventId, e);
       }
@@ -911,6 +919,64 @@ function renderControlHtml() {
         if (!eventSearchSelect) return;
         select.innerHTML = eventSearchSelect.innerHTML;
       });
+    }
+
+    async function setGate(eventId) {
+      const select = document.getElementById('gateSelect-' + eventId);
+      const value = select?.value || '';
+      const classId = value === '' ? null : Number(value);
+      try {
+        const r = await fetch('/events/' + eventId + '/gate', {
+          method: 'PATCH',
+          headers: headers(),
+          body: JSON.stringify({ classId }),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          alert(data?.error || 'Villa');
+          return;
+        }
+        const resultEl = document.getElementById('result-' + eventId);
+        if (resultEl) {
+          resultEl.className = 'ok';
+          resultEl.textContent = classId ? 'Gate sett: aðeins classId ' + classId + ' uppfærir gögn' : 'Gate aftengt: öll classId leyfd';
+        }
+      } catch (e) {
+        alert('Villa: ' + e.message);
+      }
+    }
+
+    async function loadGateOptions(eventId) {
+      const select = document.getElementById('gateSelect-' + eventId);
+      if (!select) return;
+      try {
+        // Fetch available classes for this event
+        const r = await fetch('/event/' + eventId + '/tests');
+        const data = await r.json();
+        const tests = Array.isArray(data?.res) ? data.res : [];
+
+        // Fetch current gate
+        const gateR = await fetch('/events/' + eventId + '/gate');
+        const gateData = await gateR.json();
+        const currentGate = gateData?.allowedClassId;
+
+        select.innerHTML = '<option value="">Allt leyft (ekkert gate)</option>';
+        const seen = new Set();
+        tests.forEach((test) => {
+          const classId = Number(test?.flokkar_numer);
+          if (!classId || seen.has(classId)) return;
+          seen.add(classId);
+          const name = test?.flokkur_nafn || '';
+          const comp = test?.keppnisgrein || '';
+          const option = document.createElement('option');
+          option.value = String(classId);
+          option.textContent = classId + (name ? ' — ' + name : '') + (comp ? ' (' + comp + ')' : '');
+          if (currentGate === classId) option.selected = true;
+          select.appendChild(option);
+        });
+      } catch (e) {
+        console.error('Failed to load gate options for event', eventId, e);
+      }
     }
 
     async function refreshEventCompetition(eventId, competitionType) {
@@ -1137,6 +1203,37 @@ export function registerVmixRoutes(app) {
     } catch (error) {
       res.status(400).json({ error: error.message });
     }
+  });
+
+  app.patch('/events/:eventId/gate', (req, res) => {
+    if (!requireControlSession(req, res, true)) return;
+    const eventId = Number(req.params.eventId);
+    if (!Number.isInteger(eventId) || eventId <= 0) {
+      return res.status(400).json({ error: 'Invalid eventId' });
+    }
+    const classId =
+      req.body?.classId === null || req.body?.classId === ''
+        ? null
+        : Number(req.body?.classId);
+    if (classId !== null && (!Number.isInteger(classId) || classId <= 0)) {
+      return res.status(400).json({ error: 'Invalid classId' });
+    }
+    const updated = setEventClassIdGate(eventId, classId);
+    if (!updated) {
+      return res
+        .status(404)
+        .json({ error: `Event ${eventId} is not registered` });
+    }
+    res.json({ ok: true, eventId, allowedClassId: classId });
+  });
+
+  app.get('/events/:eventId/gate', (req, res) => {
+    const eventId = Number(req.params.eventId);
+    if (!Number.isInteger(eventId) || eventId <= 0) {
+      return res.status(400).json({ error: 'Invalid eventId' });
+    }
+    const gate = getEventClassIdGate(eventId);
+    res.json({ eventId, allowedClassId: gate });
   });
 
   app.get('/events', (req, res) => {
