@@ -517,6 +517,13 @@ function renderControlHtml() {
       <h2>Nýleg webhook skilaboð</h2>
       <pre id="webhookLog">Hleð webhook log...</pre>
     </div>
+
+    <!-- GLOBAL SHORTCUTS (bottom) -->
+    <div class="card" style="margin-top:12px">
+      <h2 id="globalShortcutsHeading">Flýtileiðir</h2>
+      <p class="muted" style="margin-top:0">Flýtileiðir fyrir valið mót. Sort: bættu við <code>?sort=start</code> eða <code>?sort=rank</code>.</p>
+      <div id="globalShortcuts" class="endpoint-grid"></div>
+    </div>
   </div>
 
   <script>
@@ -577,6 +584,8 @@ function renderControlHtml() {
           option.dataset.eventName = item.name;
           eventSearchSelect.appendChild(option);
         });
+        // Re-populate swap dropdowns now that search options are loaded
+        populateSwapSelects();
       } catch (e) {
         console.error('Failed to load events:', e);
       }
@@ -684,6 +693,7 @@ function renderControlHtml() {
         tabBar.innerHTML = '';
         tabPanels.innerHTML = '';
         emptyState.style.display = 'block';
+        renderGlobalShortcuts(null);
         return;
       }
       emptyState.style.display = 'none';
@@ -742,8 +752,6 @@ function renderControlHtml() {
       const displayName = ev.label || ev.name || ('Slot ' + slotNum);
       const currentLabel = ev.label || '';
       return '<div class="tab-panel">'
-        + '<div class="grid">'
-        + '<div>'
         + '<h2>' + displayName + '</h2>'
         + '<div style="display:flex;gap:8px;align-items:end;margin-bottom:10px">'
         + '<div style="flex:1"><label>Nafn á slot (t.d. bílnúmer)</label>'
@@ -770,15 +778,6 @@ function renderControlHtml() {
         + '</div>'
         + '<h2 style="margin-top:14px">Niðurstaða</h2>'
         + '<pre id="result-' + eventId + '"></pre>'
-        + '</div>'
-        + '<div>'
-        + '<div class="card" style="margin:0">'
-        + '<h2>Flýtileiðir</h2>'
-        + '<p class="muted" style="margin-top:0">Sort: bættu við <code>?sort=start</code> eða <code>?sort=rank</code>.</p>'
-        + '<div id="endpointButtons-' + eventId + '" class="endpoint-grid"></div>'
-        + '</div>'
-        + '</div>'
-        + '</div>'
         + '</div>';
     }
 
@@ -790,9 +789,9 @@ function renderControlHtml() {
         if (!r.ok) return;
         const data = await r.json();
         renderEventClassIdState(eventId, data);
-        renderEventEndpoints(eventId);
         populateSwapSelects();
         loadGateOptions(eventId);
+        renderGlobalShortcuts(eventId);
       } catch (e) {
         console.error('Failed to load state for event', eventId, e);
       }
@@ -824,9 +823,19 @@ function renderControlHtml() {
         + '</div>';
     }
 
-    function renderEventEndpoints(eventId) {
-      const container = document.getElementById('endpointButtons-' + eventId);
+    function renderGlobalShortcuts(eventId) {
+      const container = document.getElementById('globalShortcuts');
+      const heading = document.getElementById('globalShortcutsHeading');
       if (!container) return;
+      if (!eventId) {
+        container.innerHTML = '';
+        if (heading) heading.textContent = 'Flýtileiðir';
+        return;
+      }
+      const ev = activeEvents.find((e) => e.eventId === eventId);
+      const displayName = ev ? (ev.label || ev.name || ('Mót ' + eventId)) : ('Mót ' + eventId);
+      if (heading) heading.textContent = 'Flýtileiðir — ' + displayName;
+
       const buttons = [];
       ['forkeppni', 'a-urslit', 'b-urslit'].forEach((type) => {
         buttons.push({ label: 'event/' + eventId + '/' + type, path: '/event/' + eventId + '/' + type });
@@ -915,10 +924,36 @@ function renderControlHtml() {
 
     function populateSwapSelects() {
       const selects = document.querySelectorAll('.swap-select');
+      const eventSearchSelect = document.getElementById('eventSearchSelect');
+      if (!eventSearchSelect) return;
       selects.forEach((select) => {
-        const eventSearchSelect = document.getElementById('eventSearchSelect');
-        if (!eventSearchSelect) return;
+        // The select id is "swapSelect-<eventId>" — that eventId is the
+        // currently active event on this slot.
+        const currentEventId = Number.parseInt(
+          String(select.id).replace('swapSelect-', ''),
+          10,
+        );
+        const ev = activeEvents.find((e) => e.eventId === currentEventId);
+
+        // Copy all options from the event search dropdown
         select.innerHTML = eventSearchSelect.innerHTML;
+
+        // Ensure the current event is present as an option (it may not be in
+        // the search list if it's from a different year/country)
+        let hasCurrent = Array.from(select.options).some(
+          (o) => Number.parseInt(o.value, 10) === currentEventId,
+        );
+        if (!hasCurrent && currentEventId) {
+          const opt = document.createElement('option');
+          opt.value = String(currentEventId);
+          const labelName = ev && ev.name ? ev.name : 'Mót';
+          opt.textContent = currentEventId + ' - ' + labelName;
+          opt.dataset.eventName = ev && ev.name ? ev.name : '';
+          select.appendChild(opt);
+        }
+
+        // Select the current event
+        select.value = String(currentEventId);
       });
     }
 
