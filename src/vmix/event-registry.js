@@ -1,6 +1,7 @@
 import { getEventIdFilter } from '../config.js';
-import { initializeEventState, removeEventState } from './state.js';
+import { initializeEventState, removeEventState, setEventClassId, getEventCompetitionClassIds } from './state.js';
 import { cancelRefreshesForEvent } from './refresh.js';
+import { saveAllSlots, saveSlot, loadSlots } from './slot-store.js';
 
 /**
  * Maximum number of active events allowed per instance.
@@ -11,6 +12,61 @@ export const MAX_ACTIVE_EVENTS = 10;
  * Internal registry: Map<eventId, { eventId, addedAt }>
  */
 const activeEvents = new Map();
+
+/**
+ * Build a snapshot of all slots for persistence.
+ */
+function snapshotSlots() {
+  return Array.from(activeEvents.values()).map((entry, index) => ({
+    eventId: entry.eventId,
+    slotOrder: index + 1,
+    label: entry.label || '',
+    name: entry.name || '',
+    allowedClassId: entry.allowedClassId ?? null,
+    classIds: getEventCompetitionClassIds(entry.eventId),
+  }));
+}
+
+/**
+ * Persist the current registry state (fire-and-forget, best-effort).
+ */
+function persist() {
+  saveAllSlots(snapshotSlots()).catch(() => {
+    // best-effort: persistence failures don't break the in-memory registry
+  });
+}
+
+/**
+ * Hydrate the registry from the database on startup.
+ * Restores slots, labels, names, and classId gates from the last session.
+ *
+ * @returns {Promise<number>} The number of slots restored
+ */
+export async function hydrateFromStore() {
+  const slots = await loadSlots();
+  if (slots.length === 0) return 0;
+
+  activeEvents.clear();
+  for (const slot of slots) {
+    activeEvents.set(slot.eventId, {
+      eventId: slot.eventId,
+      addedAt: new Date().toISOString(),
+      name: slot.name || '',
+      label: slot.label || '',
+      allowedClassId: slot.allowedClassId ?? null,
+    });
+    initializeEventState(slot.eventId);
+    // Restore per-competition classIds from DB
+    const classIds = slot.classIds || {};
+    for (const [compId, classId] of Object.entries(classIds)) {
+      const parsed = Number(classId);
+      if (Number.isInteger(parsed) && parsed > 0) {
+        setEventClassId(slot.eventId, Number(compId), parsed);
+      }
+    }
+  }
+  return slots.length;
+}
 
 /**
  * Register a new event in the registry.
@@ -53,6 +109,7 @@ export function registerEvent(eventId, name) {
   };
   activeEvents.set(parsed, entry);
   initializeEventState(parsed);
+  persist();
   return entry;
 }
 
@@ -71,6 +128,7 @@ export function removeEvent(eventId) {
   activeEvents.delete(parsed);
   removeEventState(parsed);
   cancelRefreshesForEvent(parsed);
+  persist();
   return true;
 }
 
@@ -182,6 +240,7 @@ export function updateEventLabel(eventId, label) {
   const parsed = Number(eventId);
   if (!activeEvents.has(parsed)) return false;
   activeEvents.get(parsed).label = String(label || '');
+  persist();
   return true;
 }
 
@@ -199,7 +258,31 @@ export function setEventClassIdGate(eventId, classId) {
   if (!activeEvents.has(parsed)) return false;
   activeEvents.get(parsed).allowedClassId =
     classId === null ? null : Number(classId);
+  persist();
   return true;
+}
+
+/**
+ * Persist the current slot state (including competition classIds) for a single event.
+ * Call this after updating competition classIds via setEventClassId/updateEventState.
+ *
+ * @param {number} eventId
+ */
+export function persistEventSlot(eventId) {
+  const parsed = Number(eventId);
+  const entry = activeEvents.get(parsed);
+  if (!entry) return;
+  const index = Array.from(activeEvents.keys()).indexOf(parsed);
+  saveSlot({
+    eventId: parsed,
+    slotOrder: index + 1,
+    label: entry.label || '',
+    name: entry.name || '',
+    allowedClassId: entry.allowedClassId ?? null,
+    classIds: getEventCompetitionClassIds(parsed),
+  }).catch(() => {
+    // best-effort
+  });
 }
 
 /**
@@ -264,6 +347,7 @@ export function replaceEvent(oldEventId, newEventId, newName) {
   removeEventState(oldParsed);
   cancelRefreshesForEvent(oldParsed);
   initializeEventState(newParsed);
+  persist();
 
   return newEntry;
 }

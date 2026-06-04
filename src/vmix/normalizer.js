@@ -1,4 +1,3 @@
-
 function calculateAldur(faedingarnumer) {
   if (!faedingarnumer || typeof faedingarnumer !== 'string') return '';
   const match = faedingarnumer.match(/(\d{4})/);
@@ -25,11 +24,7 @@ function roundScore(value, fixedTwoDecimals = false) {
 
   const rounded = Math.round(num * 100) / 100;
   if (fixedTwoDecimals) {
-    const two = rounded.toFixed(2);
-    if (two.endsWith('.00')) {
-      return `${Number.parseInt(two, 10)}.0`;
-    }
-    return two;
+    return rounded.toFixed(2);
   }
   const text = String(rounded);
   if (!text.includes('.')) {
@@ -255,7 +250,9 @@ export function normalizeCurrent(apiResponse) {
     Litur: String(apiResponse.hross_litur || ''),
     Aldur: String(calculateAldur(apiResponse.faedingarnumer)),
     FelagEiganda: String(apiResponse.adildarfelag_eiganda || ''),
-    Lid: String(apiResponse.lid || apiResponse.Lid || apiResponse.team_name || ''),
+    Lid: String(
+      apiResponse.lid || apiResponse.Lid || apiResponse.team_name || '',
+    ),
     NafnBIG: riderName ? riderName.toUpperCase() : '',
     E1: e1,
     E2: e2,
