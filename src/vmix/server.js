@@ -1106,6 +1106,11 @@ function renderControlHtml() {
       if (activeEvents.length > 0 && !activeTabId) {
         selectTab(activeEvents[0].eventId);
       }
+      // Re-fetch events shortly after — names/classIds are resolved async
+      // from Sportfengur and may not be present on the first load.
+      setTimeout(() => {
+        loadActiveEvents().catch(() => {});
+      }, 2500);
     }
 
     document.getElementById('countrySelect').addEventListener('change', () => {
