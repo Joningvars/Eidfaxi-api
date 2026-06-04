@@ -29,6 +29,7 @@ import {
   replaceEvent,
   setEventClassIdGate,
   getEventClassIdGate,
+  setEventName,
   persistEventSlot,
 } from './event-registry.js';
 import { log } from '../logger.js';
@@ -1131,6 +1132,19 @@ async function resolveClassIdsForEvent(eventId) {
     `/${SPORTFENGUR_LOCALE}/event/tests/${eventId}`,
   );
   const tests = Array.isArray(data?.res) ? data.res : [];
+
+  // Backfill the event name from Sportfengur if available
+  const firstWithName = tests.find(
+    (t) => t?.mot_heiti || t?.motsheiti || t?.mot_nafn,
+  );
+  if (firstWithName) {
+    const name =
+      firstWithName.mot_heiti ||
+      firstWithName.motsheiti ||
+      firstWithName.mot_nafn;
+    setEventName(eventId, name);
+  }
+
   for (const test of tests) {
     const competitionId = Number.parseInt(String(test?.keppni_numer), 10);
     const classId = Number.parseInt(String(test?.flokkar_numer), 10);
