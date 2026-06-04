@@ -1,6 +1,7 @@
 import { fetchLeaderboard } from './vendor.js';
 import { normalizeLeaderboard } from './normalizer.js';
 import { updateState, updateEventState } from './state.js';
+import { persistEventSlot } from './event-registry.js';
 import { log } from '../logger.js';
 
 const DEBOUNCE_MS = Number(process.env.VMIX_DEBOUNCE_MS || 200);
@@ -157,6 +158,9 @@ export async function refreshCompetitionNow(
 
     // Also update legacy state for backward compatibility
     updateState(normalizedLeaderboard, eventId, classId, competitionId);
+
+    // Persist the updated classId so it survives a restart (best-effort)
+    persistEventSlot(eventId);
 
     // Update slot metadata
     slot.lastRefreshAt = new Date().toISOString();

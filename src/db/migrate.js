@@ -160,6 +160,24 @@ const migrations = [
         updated_at = NOW();
     `,
   },
+  {
+    name: '006_add_vmix_event_slots',
+    sql: `
+      CREATE TABLE IF NOT EXISTS vmix_event_slots (
+        event_id BIGINT PRIMARY KEY,
+        slot_order INTEGER NOT NULL,
+        label TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL DEFAULT '',
+        allowed_class_id BIGINT,
+        class_ids JSONB NOT NULL DEFAULT '{}'::jsonb,
+        added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS vmix_event_slots_order_idx
+        ON vmix_event_slots (slot_order);
+    `,
+  },
 ];
 
 export async function runMigrations() {

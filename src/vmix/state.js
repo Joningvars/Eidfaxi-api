@@ -123,6 +123,23 @@ export function setEventClassId(eventId, competitionId, classId) {
 }
 
 /**
+ * Get the competition classIds for a given event as a plain object.
+ * Returns { "1": classId|null, "2": classId|null, "3": classId|null }
+ *
+ * @param {number} eventId
+ * @returns {Object}
+ */
+export function getEventCompetitionClassIds(eventId) {
+  const state = eventStates.get(Number(eventId));
+  if (!state) return { 1: null, 2: null, 3: null };
+  return {
+    1: state.competitions[1]?.classId ?? null,
+    2: state.competitions[2]?.classId ?? null,
+    3: state.competitions[3]?.classId ?? null,
+  };
+}
+
+/**
  * Get metadata for all events in the state store.
  *
  * @returns {Array<{ eventId: number, competitions: object }>}

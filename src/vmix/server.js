@@ -29,6 +29,7 @@ import {
   replaceEvent,
   setEventClassIdGate,
   getEventClassIdGate,
+  persistEventSlot,
 } from './event-registry.js';
 import { log } from '../logger.js';
 import JSZip from 'jszip';
@@ -941,6 +942,9 @@ function renderControlHtml() {
           resultEl.className = 'ok';
           resultEl.textContent = classId ? 'Gate sett: aðeins classId ' + classId + ' uppfærir gögn' : 'Gate aftengt: öll classId leyfd';
         }
+        // Sync classId input with the newly saved gate
+        const classIdInput = document.getElementById('classIdInput-' + eventId);
+        if (classIdInput) classIdInput.value = classId ? String(classId) : '';
       } catch (e) {
         alert('Villa: ' + e.message);
       }
@@ -974,6 +978,12 @@ function renderControlHtml() {
           if (currentGate === classId) option.selected = true;
           select.appendChild(option);
         });
+
+        // Populate classId input from gate if the field is currently empty
+        const classIdInput = document.getElementById('classIdInput-' + eventId);
+        if (classIdInput && !classIdInput.value && currentGate) {
+          classIdInput.value = String(currentGate);
+        }
       } catch (e) {
         console.error('Failed to load gate options for event', eventId, e);
       }
@@ -1004,6 +1014,14 @@ function renderControlHtml() {
         }
         // Reload state after refresh
         loadEventTabState(eventId);
+        // If a manual classId was used and the refresh succeeded, persist it as the gate
+        if (r.ok && Number.isInteger(manualClassId) && manualClassId > 0) {
+          fetch('/events/' + eventId + '/gate', {
+            method: 'PATCH',
+            headers: headers(),
+            body: JSON.stringify({ classId: manualClassId }),
+          }).then(() => loadGateOptions(eventId)).catch(() => {});
+        }
       } catch (e) {
         if (resultEl) {
           resultEl.className = 'warn';
@@ -1089,6 +1107,27 @@ async function resolveClassIdsForEvent(eventId) {
       classId > 0
     ) {
       setEventClassId(eventId, competitionId, classId);
+    }
+  }
+  // Persist the resolved classIds so they survive a restart
+  persistEventSlot(eventId);
+}
+
+/**
+ * Re-resolve classIds from Sportfengur for all currently active events.
+ * Called after hydrateFromStore() on startup so competition classIds
+ * are restored without needing a webhook or manual refresh.
+ */
+export async function resolveClassIdsForAllActiveEvents() {
+  const events = getActiveEvents();
+  for (const ev of events) {
+    try {
+      await resolveClassIdsForEvent(ev.eventId);
+    } catch (err) {
+      console.error(
+        `[Event Registry] Failed to re-resolve classIds for event ${ev.eventId}:`,
+        err.message,
+      );
     }
   }
 }
@@ -1490,11 +1529,15 @@ export function registerVmixRoutes(app) {
     const bodyClassId =
       req.body?.classId == null ? null : parsePositiveInt(req.body.classId);
 
-    // Try to get classId from event state if not provided in body
+    // classId resolution priority:
+    // 1. Explicit classId in request body (manual override)
+    // 2. The gated classId for this event (if a gate is set)
+    // 3. The classId stored in state for this competition
+    const gateClassId = getEventClassIdGate(eventId);
     const eventState = getEventState(eventId);
     const stateClassId =
       eventState?.competitions?.[competitionId]?.classId || null;
-    const classId = bodyClassId ?? stateClassId;
+    const classId = bodyClassId ?? gateClassId ?? stateClassId;
 
     if (!classId) {
       return res
