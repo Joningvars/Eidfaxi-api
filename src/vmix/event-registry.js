@@ -1,5 +1,10 @@
 import { getEventIdFilter } from '../config.js';
-import { initializeEventState, removeEventState, setEventClassId, getEventCompetitionClassIds } from './state.js';
+import {
+  initializeEventState,
+  removeEventState,
+  setEventClassId,
+  getEventCompetitionClassIds,
+} from './state.js';
 import { cancelRefreshesForEvent } from './refresh.js';
 import { saveAllSlots, saveSlot, loadSlots } from './slot-store.js';
 
@@ -241,6 +246,26 @@ export function updateEventLabel(eventId, label) {
   if (!activeEvents.has(parsed)) return false;
   activeEvents.get(parsed).label = String(label || '');
   persist();
+  return true;
+}
+
+/**
+ * Set/update the event name (from Sportfengur). Only updates if a name is
+ * provided and differs from the stored one.
+ *
+ * @param {number} eventId
+ * @param {string} name
+ * @returns {boolean}
+ */
+export function setEventName(eventId, name) {
+  const parsed = Number(eventId);
+  if (!activeEvents.has(parsed)) return false;
+  const entry = activeEvents.get(parsed);
+  const newName = String(name || '').trim();
+  if (newName && entry.name !== newName) {
+    entry.name = newName;
+    persist();
+  }
   return true;
 }
 
