@@ -7,6 +7,7 @@ import {
 } from './state.js';
 import { cancelRefreshesForEvent } from './refresh.js';
 import { saveAllSlots, saveSlot, loadSlots } from './slot-store.js';
+import crypto from 'crypto';
 
 /**
  * Maximum number of active events allowed per instance.
@@ -19,6 +20,22 @@ export const MAX_ACTIVE_EVENTS = 10;
 const activeEvents = new Map();
 
 /**
+ * Generate login credentials for a slot.
+ * Username is based on the slot position, password is random and readable.
+ */
+function generateCredentials(slotOrder) {
+  const username = `bill${slotOrder}`;
+  // Short, readable random password (avoids ambiguous chars)
+  const alphabet = 'abcdefghijkmnpqrstuvwxyz23456789';
+  let pw = '';
+  const bytes = crypto.randomBytes(8);
+  for (let i = 0; i < 8; i += 1) {
+    pw += alphabet[bytes[i] % alphabet.length];
+  }
+  return { loginUsername: username, loginPassword: pw };
+}
+
+/**
  * Build a snapshot of all slots for persistence.
  */
 function snapshotSlots() {
@@ -29,6 +46,8 @@ function snapshotSlots() {
     name: entry.name || '',
     allowedClassId: entry.allowedClassId ?? null,
     classIds: getEventCompetitionClassIds(entry.eventId),
+    loginUsername: entry.loginUsername ?? null,
+    loginPassword: entry.loginPassword ?? null,
   }));
 }
 
@@ -59,6 +78,8 @@ export async function hydrateFromStore() {
       name: slot.name || '',
       label: slot.label || '',
       allowedClassId: slot.allowedClassId ?? null,
+      loginUsername: slot.loginUsername ?? null,
+      loginPassword: slot.loginPassword ?? null,
     });
     initializeEventState(slot.eventId);
     // Restore per-competition classIds from DB
@@ -111,6 +132,7 @@ export function registerEvent(eventId, name) {
     addedAt: new Date().toISOString(),
     name: name ? String(name) : '',
     label: '',
+    ...generateCredentials(activeEvents.size + 1),
   };
   activeEvents.set(parsed, entry);
   initializeEventState(parsed);
@@ -228,6 +250,41 @@ export function getActiveEventsWithSlots() {
 }
 
 /**
+ * Find a slot login by username. Returns { slot, eventId, password } or null.
+ * Used by the auth layer to validate dynamically-created slot logins.
+ *
+ * @param {string} username
+ * @returns {{ slot: number, eventId: number, password: string }|null}
+ */
+export function findSlotLogin(username) {
+  const entries = Array.from(activeEvents.values());
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i];
+    if (entry.loginUsername && entry.loginUsername === username) {
+      return {
+        slot: i + 1,
+        eventId: entry.eventId,
+        password: entry.loginPassword || '',
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Get the slot number (1-based) for a given eventId, or null if not active.
+ *
+ * @param {number} eventId
+ * @returns {number|null}
+ */
+export function getSlotForEventId(eventId) {
+  const parsed = Number(eventId);
+  const keys = Array.from(activeEvents.keys());
+  const idx = keys.indexOf(parsed);
+  return idx === -1 ? null : idx + 1;
+}
+
+/**
  * Clear all events from the registry. Used for testing.
  */
 export function clearRegistry() {
@@ -305,6 +362,8 @@ export function persistEventSlot(eventId) {
     name: entry.name || '',
     allowedClassId: entry.allowedClassId ?? null,
     classIds: getEventCompetitionClassIds(parsed),
+    loginUsername: entry.loginUsername ?? null,
+    loginPassword: entry.loginPassword ?? null,
   }).catch(() => {
     // best-effort
   });
@@ -358,6 +417,8 @@ export function replaceEvent(oldEventId, newEventId, newName) {
     addedAt: new Date().toISOString(),
     name: newName ? String(newName) : '',
     label,
+    loginUsername: oldEntry.loginUsername ?? null,
+    loginPassword: oldEntry.loginPassword ?? null,
   };
 
   for (const [key, value] of entries) {

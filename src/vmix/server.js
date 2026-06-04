@@ -15,7 +15,12 @@ import {
   setEventIdFilter,
   SPORTFENGUR_LOCALE,
 } from '../config.js';
-import { requireControlSession } from '../control-auth.js';
+import {
+  requireControlSession,
+  requireAdmin,
+  canAccessSlot,
+  getRequestRole,
+} from '../control-auth.js';
 import { refreshCompetitionNow, isRefreshInProgress } from './refresh.js';
 import {
   registerEvent,
@@ -31,9 +36,21 @@ import {
   getEventClassIdGate,
   setEventName,
   persistEventSlot,
+  getSlotForEventId,
 } from './event-registry.js';
 import { log } from '../logger.js';
 import JSZip from 'jszip';
+
+/**
+ * Authorization helper: can the current request manage the slot that the
+ * given eventId currently occupies? Admins can manage any slot; slot users
+ * only their own.
+ */
+function canAccessEventSlot(req, eventId) {
+  const slot = getSlotForEventId(eventId);
+  if (slot === null) return true; // not active yet — let route 404 naturally
+  return canAccessSlot(req, slot);
+}
 
 const COMPETITION_TYPE_TO_ID = {
   forkeppni: 1,
@@ -1221,7 +1238,7 @@ export function registerVmixRoutes(app) {
   // --- Event Management API Routes ---
 
   app.post('/events/register', async (req, res) => {
-    if (!requireControlSession(req, res, true)) return;
+    if (!requireAdmin(req, res, true)) return;
     const eventId = req.body?.eventId;
     const name = req.body?.name || '';
     try {
@@ -1243,7 +1260,7 @@ export function registerVmixRoutes(app) {
   });
 
   app.delete('/events/:eventId', (req, res) => {
-    if (!requireControlSession(req, res, true)) return;
+    if (!requireAdmin(req, res, true)) return;
     const eventId = Number(req.params.eventId);
     if (!Number.isInteger(eventId) || eventId <= 0) {
       return res
@@ -1266,6 +1283,9 @@ export function registerVmixRoutes(app) {
     if (!Number.isInteger(eventId) || eventId <= 0) {
       return res.status(400).json({ error: 'Invalid eventId' });
     }
+    if (!canAccessEventSlot(req, eventId)) {
+      return res.status(403).json({ error: 'Forbidden: not your slot' });
+    }
     const label = String(req.body?.label ?? '');
     const updated = updateEventLabel(eventId, label);
     if (!updated) {
@@ -1277,7 +1297,7 @@ export function registerVmixRoutes(app) {
   });
 
   app.patch('/events/:eventId/replace', async (req, res) => {
-    if (!requireControlSession(req, res, true)) return;
+    if (!requireAdmin(req, res, true)) return;
     const oldEventId = Number(req.params.eventId);
     const newEventId = req.body?.eventId;
     const newName = req.body?.name || '';
@@ -1304,6 +1324,9 @@ export function registerVmixRoutes(app) {
     if (!Number.isInteger(eventId) || eventId <= 0) {
       return res.status(400).json({ error: 'Invalid eventId' });
     }
+    if (!canAccessEventSlot(req, eventId)) {
+      return res.status(403).json({ error: 'Forbidden: not your slot' });
+    }
     const classId =
       req.body?.classId === null || req.body?.classId === ''
         ? null
@@ -1321,6 +1344,7 @@ export function registerVmixRoutes(app) {
   });
 
   app.get('/events/:eventId/gate', (req, res) => {
+    if (!requireControlSession(req, res, true)) return;
     const eventId = Number(req.params.eventId);
     if (!Number.isInteger(eventId) || eventId <= 0) {
       return res.status(400).json({ error: 'Invalid eventId' });
@@ -1330,13 +1354,30 @@ export function registerVmixRoutes(app) {
   });
 
   app.get('/events', (req, res) => {
-    const events = getActiveEventsWithSlots();
+    if (!requireControlSession(req, res, true)) return;
+    let events = getActiveEventsWithSlots();
+    // Slot users only see their own slot; admins see all.
+    const role = getRequestRole(req);
+    const isAdmin = role && role.role === 'admin';
+    if (role && role.role === 'slot') {
+      events = events.filter((e) => Number(e.slot) === Number(role.slot));
+    }
+    // Only admins receive the login password; strip it for everyone else.
+    events = events.map((e) => {
+      const out = { ...e };
+      if (!isAdmin) {
+        delete out.loginPassword;
+        delete out.loginUsername;
+      }
+      return out;
+    });
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/json');
     res.json({ events });
   });
 
   app.get('/events/state', (req, res) => {
+    if (!requireControlSession(req, res, true)) return;
     const metadata = getAllEventsMetadata();
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/json');
@@ -1344,6 +1385,7 @@ export function registerVmixRoutes(app) {
   });
 
   app.get('/event/:eventId/state', (req, res) => {
+    if (!requireControlSession(req, res, true)) return;
     const eventId = Number(req.params.eventId);
     if (!Number.isInteger(eventId) || eventId <= 0) {
       return res
@@ -1566,6 +1608,11 @@ export function registerVmixRoutes(app) {
 
     const eventId = validateEventId(req, res);
     if (eventId === null) return;
+
+    // Slot users may only refresh their own slot
+    if (!canAccessEventSlot(req, eventId)) {
+      return res.status(403).json({ error: 'Forbidden: not your slot' });
+    }
 
     const scope = validateCompetitionType(req, res);
     if (!scope) return;

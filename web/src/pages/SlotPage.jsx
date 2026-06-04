@@ -1,0 +1,275 @@
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useParams, useOutletContext, Link } from 'react-router-dom';
+import { api, COMPETITION_TYPES } from '../api.js';
+
+const COMP_LABELS = {
+  forkeppni: 'forkeppni',
+  'a-urslit': 'a-úrslit',
+  'b-urslit': 'b-úrslit',
+};
+const COMP_ID_BY_TYPE = { forkeppni: 1, 'a-urslit': 2, 'b-urslit': 3 };
+
+export default function SlotPage() {
+  const { slot } = useParams();
+  const { events, reloadEvents } = useOutletContext();
+
+  const slotNum = Number.parseInt(slot, 10);
+  const ev = useMemo(
+    () => events.find((e, idx) => (e.slot ?? idx + 1) === slotNum),
+    [events, slotNum],
+  );
+  const eventId = ev?.eventId;
+
+  const [state, setState] = useState(null);
+  const [tests, setTests] = useState([]);
+  const [gate, setGate] = useState('');
+  const [labelInput, setLabelInput] = useState('');
+  const [manualClassId, setManualClassId] = useState('');
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const loadState = useCallback(() => {
+    if (!eventId) return;
+    api
+      .getEventState(eventId)
+      .then(setState)
+      .catch(() => setState(null));
+  }, [eventId]);
+
+  useEffect(() => {
+    setLabelInput(ev?.label || '');
+  }, [ev?.label, eventId]);
+
+  useEffect(() => {
+    if (!eventId) return;
+    loadState();
+    api
+      .getTests(eventId)
+      .then((d) => setTests(Array.isArray(d?.res) ? d.res : []))
+      .catch(() => setTests([]));
+    api
+      .getGate(eventId)
+      .then((g) =>
+        setGate(g?.allowedClassId == null ? '' : String(g.allowedClassId)),
+      )
+      .catch(() => {});
+    const id = setInterval(loadState, 6000);
+    return () => clearInterval(id);
+  }, [eventId, loadState]);
+
+  const classOptions = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    for (const t of tests) {
+      const cid = Number.parseInt(String(t?.flokkar_numer), 10);
+      if (!cid || seen.has(cid)) continue;
+      seen.add(cid);
+      const name = t?.flokkur_nafn || '';
+      const grein = t?.keppnisgrein || '';
+      out.push({
+        classId: cid,
+        label: `${cid}${name ? ' — ' + name : ''}${grein ? ' (' + grein + ')' : ''}`,
+      });
+    }
+    return out;
+  }, [tests]);
+
+  if (!ev) {
+    return (
+      <div className="card empty">
+        Ekkert mót á slot {slot}. <Link to="/">Fara í yfirlit</Link>
+      </div>
+    );
+  }
+
+  const displayName = ev.label || ev.name || `Mót ${eventId}`;
+
+  async function saveLabel() {
+    setBusy(true);
+    try {
+      await api.setLabel(eventId, labelInput.trim());
+      reloadEvents();
+      setResult({ kind: 'ok', text: 'Nafn vistað.' });
+    } catch (e) {
+      setResult({ kind: 'warn', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveGate() {
+    setBusy(true);
+    try {
+      const classId = gate === '' ? null : Number(gate);
+      await api.setGate(eventId, classId);
+      setResult({
+        kind: 'ok',
+        text: classId
+          ? `Gate sett: aðeins classId ${classId}`
+          : 'Gate aftengt: öll classId leyfð',
+      });
+    } catch (e) {
+      setResult({ kind: 'warn', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doRefresh(type) {
+    setBusy(true);
+    setResult({ kind: 'ok', text: `Uppfæri ${COMP_LABELS[type]}...` });
+    try {
+      const cid = manualClassId.trim()
+        ? Number(manualClassId.trim())
+        : undefined;
+      const data = await api.refresh(eventId, type, cid);
+      setResult({ kind: 'ok', text: JSON.stringify(data, null, 2) });
+      loadState();
+    } catch (e) {
+      setResult({ kind: 'warn', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const comps = state?.competitions || {};
+  const apiBase = window.location.origin;
+  const shortcuts = [];
+  for (const type of COMPETITION_TYPES) {
+    shortcuts.push({
+      label: `event/${slotNum}/${type}`,
+      path: `/event/${slotNum}/${type}`,
+    });
+    shortcuts.push({
+      label: `event/${slotNum}/${type}/csv`,
+      path: `/event/${slotNum}/${type}/csv`,
+    });
+  }
+  shortcuts.push({
+    label: `event/${slotNum}/leaderboards.zip`,
+    path: `/event/${slotNum}/leaderboards.zip`,
+  });
+  shortcuts.push({
+    label: `event/${slotNum}/state`,
+    path: `/event/${slotNum}/state`,
+  });
+
+  return (
+    <>
+      <div className="card">
+        <div className="slot-num">Slot {slotNum}</div>
+        <h2 style={{ marginTop: 4 }}>{displayName}</h2>
+        <div className="slot-meta muted">eventId: {eventId}</div>
+
+        <label>Nafn á slot (t.d. bílnúmer)</label>
+        <div className="row">
+          <input
+            className="grow"
+            value={labelInput}
+            placeholder="T.d. Bíll 1"
+            onChange={(e) => setLabelInput(e.target.value)}
+          />
+          <button className="secondary" onClick={saveLabel} disabled={busy}>
+            Vista nafn
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>classId og gögn</h3>
+        <div className="comp-grid">
+          {COMPETITION_TYPES.map((type) => {
+            const cid = COMP_ID_BY_TYPE[type];
+            const c = comps[cid] || comps[String(cid)] || {};
+            return (
+              <div className="comp-box" key={type}>
+                <div className="comp-label">{COMP_LABELS[type]}</div>
+                {c.classId ? (
+                  <div className="stateval">{c.classId}</div>
+                ) : (
+                  <div className="stateval missing">ekki sett</div>
+                )}
+                <div className="comp-count">
+                  {c.leaderboardCount ?? 0} færslur
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <label style={{ marginTop: 12 }}>
+          ClassId gating (aðeins þetta classId uppfærir gögn)
+        </label>
+        <div className="row">
+          <select
+            className="grow"
+            value={gate}
+            onChange={(e) => setGate(e.target.value)}
+          >
+            <option value="">Allt leyft (ekkert gate)</option>
+            {classOptions.map((o) => (
+              <option key={o.classId} value={o.classId}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <button className="secondary" onClick={saveGate} disabled={busy}>
+            Setja gate
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Handvirk uppfærsla</h3>
+        <label>ClassId (valfrjálst handvirkt)</label>
+        <input
+          type="number"
+          value={manualClassId}
+          placeholder="T.d. 203060"
+          onChange={(e) => setManualClassId(e.target.value)}
+        />
+        <div className="three" style={{ marginTop: 10 }}>
+          {COMPETITION_TYPES.map((type) => (
+            <button
+              key={type}
+              className="primary"
+              onClick={() => doRefresh(type)}
+              disabled={busy}
+            >
+              Uppfæra {COMP_LABELS[type]}
+            </button>
+          ))}
+        </div>
+        {result && (
+          <>
+            <label style={{ marginTop: 12 }}>Niðurstaða</label>
+            <pre className={result.kind === 'warn' ? 'warn' : ''}>
+              {result.text}
+            </pre>
+          </>
+        )}
+      </div>
+
+      <div className="card">
+        <h3>Flýtileiðir (vMix slóðir)</h3>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Bættu við <code>?sort=rank</code> fyrir röðun eftir einkunn.
+        </p>
+        <div className="endpoint-grid">
+          {shortcuts.map((s) => (
+            <button
+              key={s.path}
+              type="button"
+              className="endpoint-btn"
+              onClick={() =>
+                window.open(apiBase + s.path, '_blank', 'noopener')
+              }
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}

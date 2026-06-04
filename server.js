@@ -1,5 +1,7 @@
 import './src/logger.js';
 import express from 'express';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   registerHealthRoute,
   registerRootRoute,
@@ -10,8 +12,14 @@ import {
   registerControlWebhookRoutes,
 } from './src/webhooks.js';
 import { registerDocs } from './src/docs.js';
-import { registerControlAuthRoutes } from './src/control-auth.js';
-import { registerVmixRoutes, resolveClassIdsForAllActiveEvents } from './src/vmix/server.js';
+import {
+  registerControlAuthRoutes,
+  requireControlSession,
+} from './src/control-auth.js';
+import {
+  registerVmixRoutes,
+  resolveClassIdsForAllActiveEvents,
+} from './src/vmix/server.js';
 import { registerRosterRoutes } from './src/roster-routes.js';
 import { registerEvent, hydrateFromStore } from './src/vmix/event-registry.js';
 import { initializeState } from './src/vmix/state.js';
@@ -78,6 +86,29 @@ registerDocs(app);
 registerControlAuthRoutes(app);
 registerVmixRoutes(app);
 registerRosterRoutes(app);
+
+// --- Serve the built Vite React control app at /app ---
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const webDist = path.join(__dirname, 'web', 'dist');
+
+// Require a valid control session before serving the app (any role).
+// Assets (JS/CSS) are allowed through so the login redirect page can't break,
+// but the HTML entry points are gated.
+function requireAppSession(req, res, next) {
+  if (requireControlSession(req, res, false)) {
+    return next();
+  }
+  // requireControlSession already redirected to /control/login
+}
+
+app.use('/app', requireAppSession, express.static(webDist));
+
+// SPA fallback: any /app/* route that isn't a static file serves index.html
+app.get('/app/{*splat}', requireAppSession, (req, res, next) => {
+  res.sendFile(path.join(webDist, 'index.html'), (err) => {
+    if (err) next();
+  });
+});
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

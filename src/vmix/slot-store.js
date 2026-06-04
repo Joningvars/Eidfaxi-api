@@ -20,14 +20,16 @@ export async function saveSlot(slot) {
   if (!isDbConfigured()) return;
   try {
     await queryDb(
-      `INSERT INTO vmix_event_slots (event_id, slot_order, label, name, allowed_class_id, class_ids, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      `INSERT INTO vmix_event_slots (event_id, slot_order, label, name, allowed_class_id, class_ids, login_username, login_password, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
        ON CONFLICT (event_id) DO UPDATE SET
          slot_order = EXCLUDED.slot_order,
          label = EXCLUDED.label,
          name = EXCLUDED.name,
          allowed_class_id = EXCLUDED.allowed_class_id,
          class_ids = EXCLUDED.class_ids,
+         login_username = EXCLUDED.login_username,
+         login_password = EXCLUDED.login_password,
          updated_at = NOW()`,
       [
         slot.eventId,
@@ -36,6 +38,8 @@ export async function saveSlot(slot) {
         slot.name || '',
         slot.allowedClassId ?? null,
         JSON.stringify(slot.classIds ?? {}),
+        slot.loginUsername ?? null,
+        slot.loginPassword ?? null,
       ],
     );
   } catch (error) {
@@ -72,8 +76,8 @@ export async function saveAllSlots(slots) {
     await queryDb('DELETE FROM vmix_event_slots');
     for (const slot of slots) {
       await queryDb(
-        `INSERT INTO vmix_event_slots (event_id, slot_order, label, name, allowed_class_id, class_ids, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+        `INSERT INTO vmix_event_slots (event_id, slot_order, label, name, allowed_class_id, class_ids, login_username, login_password, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
         [
           slot.eventId,
           slot.slotOrder,
@@ -81,6 +85,8 @@ export async function saveAllSlots(slots) {
           slot.name || '',
           slot.allowedClassId ?? null,
           JSON.stringify(slot.classIds ?? {}),
+          slot.loginUsername ?? null,
+          slot.loginPassword ?? null,
         ],
       );
     }
@@ -104,7 +110,7 @@ export async function loadSlots() {
   if (!isDbConfigured()) return [];
   try {
     const result = await queryDb(
-      `SELECT event_id, slot_order, label, name, allowed_class_id, class_ids
+      `SELECT event_id, slot_order, label, name, allowed_class_id, class_ids, login_username, login_password
        FROM vmix_event_slots
        ORDER BY slot_order ASC`,
     );
@@ -128,6 +134,8 @@ export async function loadSlots() {
         allowedClassId:
           row.allowed_class_id == null ? null : Number(row.allowed_class_id),
         classIds,
+        loginUsername: row.login_username || null,
+        loginPassword: row.login_password || null,
       };
     });
   } catch (error) {

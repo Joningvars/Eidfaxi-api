@@ -21,6 +21,38 @@ export const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 export const DEBUG_LOGS = DEBUG_MODE;
 export const CONTROL_AUTH_USERNAME = process.env.CONTROL_AUTH_USERNAME || '';
 export const CONTROL_AUTH_PASSWORD = process.env.CONTROL_AUTH_PASSWORD || '';
+
+/**
+ * Per-slot car logins. Configured via SLOT_LOGINS env var as a
+ * semicolon-separated list of `username:password:slot` entries.
+ *
+ *   SLOT_LOGINS="bill1:leyni1:1;bill2:leyni2:2;bill3:leyni3:3"
+ *
+ * Each car operator logs in with their own credentials and can only see and
+ * manage the slot number assigned to them. The CONTROL_AUTH_* admin login
+ * continues to see and manage all slots.
+ */
+function parseSlotLogins(raw) {
+  const map = new Map();
+  if (!raw) return map;
+  for (const entry of String(raw).split(';')) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(':');
+    if (parts.length < 3) continue;
+    const username = parts[0].trim();
+    const password = parts[1].trim();
+    const slot = Number.parseInt(parts[2].trim(), 10);
+    if (!username || !password || !Number.isInteger(slot) || slot <= 0) {
+      continue;
+    }
+    map.set(username, { username, password, slot });
+  }
+  return map;
+}
+
+export const SLOT_LOGINS = parseSlotLogins(process.env.SLOT_LOGINS);
+
 const parsedEventId = Number(
   process.env.EVENT_ID_FILTER ?? process.env.EVENT_ID,
 );

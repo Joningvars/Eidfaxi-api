@@ -7,7 +7,9 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon server.js",
     "start": "node server.js",
-    "db:migrate": "node scripts/migrate-db.js"
+    "db:migrate": "node scripts/migrate-db.js",
+    "build:web": "cd web && npm install && npm run build",
+    "postinstall": "cd web && npm install && npm run build"
   },
   "keywords": [],
   "author": "",
