@@ -5,9 +5,11 @@ import './styles.css';
 import Layout from './Layout.jsx';
 import Overview from './pages/Overview.jsx';
 import SlotPage from './pages/SlotPage.jsx';
+import Login from './pages/Login.jsx';
 
 const router = createBrowserRouter(
   [
+    { path: '/login', element: <Login /> },
     {
       path: '/',
       element: <Layout />,

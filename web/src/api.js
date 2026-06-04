@@ -30,6 +30,21 @@ const jsonHeaders = { 'Content-Type': 'application/json' };
 export const api = {
   me: () => fetch('/control/me').then(json),
 
+  login: (username, password) =>
+    fetch('/control/login', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ username, password }),
+    }).then(json),
+
+  logout: () =>
+    fetch('/control/logout', {
+      method: 'POST',
+      headers: jsonHeaders,
+    })
+      .then(json)
+      .catch(() => {}),
+
   listEvents: () => fetch('/events').then(json),
 
   getEventState: (eventId) => fetch(`/event/${eventId}/state`).then(json),

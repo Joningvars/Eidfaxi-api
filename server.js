@@ -91,20 +91,15 @@ registerRosterRoutes(app);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webDist = path.join(__dirname, 'web', 'dist');
 
-// Require a valid control session before serving the app (any role).
-// Assets (JS/CSS) are allowed through so the login redirect page can't break,
-// but the HTML entry points are gated.
-function requireAppSession(req, res, next) {
-  if (requireControlSession(req, res, false)) {
-    return next();
-  }
-  // requireControlSession already redirected to /control/login
-}
-
-app.use('/app', requireAppSession, express.static(webDist));
+// The SPA bundle (HTML/JS/CSS) is served openly — it contains no secrets.
+// Auth is enforced two ways:
+//   1. Every data API (/events, /event/*, etc.) requires a control session.
+//   2. The React app calls /control/me on load; on 401 it routes to /login.
+// Gating the static bundle here caused a redirect loop with /app/login.
+app.use('/app', express.static(webDist));
 
 // SPA fallback: any /app/* route that isn't a static file serves index.html
-app.get('/app/{*splat}', requireAppSession, (req, res, next) => {
+app.get('/app/{*splat}', (req, res, next) => {
   res.sendFile(path.join(webDist, 'index.html'), (err) => {
     if (err) next();
   });

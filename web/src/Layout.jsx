@@ -27,7 +27,7 @@ export default function Layout() {
         }
       })
       .catch(() => {
-        window.location.href = '/control/login';
+        navigate('/login', { replace: true });
       });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -42,7 +42,15 @@ export default function Layout() {
   return (
     <div className="wrap">
       <div className="topbar">
-        <h1>Eidfaxi Stjórnborð</h1>
+        <div className="brand">
+          <img src="/app/eidfaxi-logo.png" alt="EiðfaxiTV" />
+          <div>
+            <div className="brand-name">
+              Eiðfaxi<span className="tv">TV</span>
+            </div>
+            <div className="brand-sub">Stjórnborð</div>
+          </div>
+        </div>
         <nav className="nav">
           {isAdmin && (
             <NavLink
@@ -70,9 +78,16 @@ export default function Layout() {
               </NavLink>
             );
           })}
-          <a className="navlink" href="/control/logout">
+          <button
+            type="button"
+            className="navlink logout"
+            onClick={async () => {
+              await api.logout();
+              navigate('/login', { replace: true });
+            }}
+          >
             Útskrá
-          </a>
+          </button>
         </nav>
       </div>
       <Outlet context={{ events, reloadEvents: load, me, isAdmin }} />

@@ -203,25 +203,30 @@ export function canAccessSlot(req, slot) {
 }
 
 export function registerControlAuthRoutes(app) {
+  // The login UI now lives in the React app at /app/login. Keep this GET
+  // route as a redirect so existing links / the auth-guard redirect still work.
   app.get('/control/login', (req, res) => {
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderLoginHtml());
+    res.redirect('/app/login');
   });
 
   app.post('/control/login', (req, res) => {
+    const wantsJson =
+      String(req.header('accept') || '').includes('application/json') ||
+      String(req.header('content-type') || '').includes('application/json');
+
     const hasAdmin = CONTROL_AUTH_USERNAME && CONTROL_AUTH_PASSWORD;
     const hasSlotLogins = SLOT_LOGINS.size > 0;
 
     if (!hasAdmin && !hasSlotLogins) {
+      const msg =
+        'Innskraning er ekki stillt. Settu CONTROL_AUTH_USERNAME og CONTROL_AUTH_PASSWORD (eða SLOT_LOGINS) í env.';
+      if (wantsJson) {
+        return res.status(500).json({ ok: false, error: msg });
+      }
       res.status(500);
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(
-        renderLoginHtml(
-          'Innskraning er ekki stillt. Settu CONTROL_AUTH_USERNAME og CONTROL_AUTH_PASSWORD (eða SLOT_LOGINS) í env.',
-        ),
-      );
+      res.send(renderLoginHtml(msg));
       return;
     }
 
@@ -255,10 +260,14 @@ export function registerControlAuthRoutes(app) {
     }
 
     if (!role) {
+      const msg = 'Rangt notandanafn eða lykilorð.';
+      if (wantsJson) {
+        return res.status(401).json({ ok: false, error: msg });
+      }
       res.status(401);
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(renderLoginHtml('Rangt notandanafn eða lykilorð.'));
+      res.send(renderLoginHtml(msg));
       return;
     }
 
@@ -266,19 +275,27 @@ export function registerControlAuthRoutes(app) {
     sessions.set(token, { expiresAt: now() + SESSION_TTL_MS, role, slot });
     setSessionCookie(res, token);
 
-    // Slot users go straight to their slot page; admins to the overview.
-    if (role === 'slot') {
-      res.redirect(`/app/slot/${slot}`);
-    } else {
-      res.redirect('/app');
+    const redirectTo = role === 'slot' ? `/app/slot/${slot}` : '/app';
+
+    if (wantsJson) {
+      return res.json({ ok: true, role, slot, redirectTo });
     }
+
+    // Slot users go straight to their slot page; admins to the overview.
+    res.redirect(redirectTo);
   });
 
   const handleLogout = (req, res) => {
     const token = getSessionToken(req);
     if (token) sessions.delete(token);
     clearSessionCookie(res);
-    res.redirect('/control/login');
+    const wantsJson =
+      String(req.header('accept') || '').includes('application/json') ||
+      String(req.header('content-type') || '').includes('application/json');
+    if (wantsJson) {
+      return res.json({ ok: true });
+    }
+    res.redirect('/app/login');
   };
 
   app.post('/control/logout', handleLogout);

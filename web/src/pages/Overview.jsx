@@ -156,22 +156,33 @@ export default function Overview() {
               const slot = ev.slot ?? idx + 1;
               const state = states[ev.eventId];
               const comps = state?.competitions || {};
+              const totalRows = [1, 2, 3].reduce((sum, cid) => {
+                const c = comps[cid] || comps[String(cid)] || {};
+                return sum + (c.leaderboardCount ?? 0);
+              }, 0);
+              const isLive = totalRows > 0;
               return (
                 <div className="slot-card" key={ev.eventId}>
-                  <div className="slot-num">Slot {slot}</div>
+                  <div className="slot-head">
+                    <span className="slot-num">Slot {slot}</span>
+                    <span className={`badge ${isLive ? 'live' : 'idle'}`}>
+                      <span className="dot" />
+                      {isLive ? 'Með gögn' : 'Tómt'}
+                    </span>
+                  </div>
                   <div className="slot-name">
                     {ev.label || ev.name || `Mót ${ev.eventId}`}
                   </div>
-                  <div className="slot-meta">eventId: {ev.eventId}</div>
+                  <div className="slot-meta">eventId {ev.eventId}</div>
                   {(ev.loginUsername || ev.loginPassword) && (
-                    <div className="statebox" style={{ fontSize: 12 }}>
-                      <div>
-                        Innskráning:&nbsp;
-                        <span className="stateval">{ev.loginUsername}</span>
+                    <div className="creds">
+                      <div className="creds-row">
+                        <span className="creds-key">Innskráning</span>
+                        <span className="creds-val">{ev.loginUsername}</span>
                       </div>
-                      <div>
-                        Lykilorð:&nbsp;
-                        <span className="stateval">{ev.loginPassword}</span>
+                      <div className="creds-row">
+                        <span className="creds-key">Lykilorð</span>
+                        <span className="creds-val">{ev.loginPassword}</span>
                       </div>
                     </div>
                   )}
@@ -187,7 +198,7 @@ export default function Overview() {
                       );
                     })}
                   </div>
-                  <div className="row" style={{ marginTop: 6 }}>
+                  <div className="row" style={{ marginTop: 4 }}>
                     <button
                       className="ghost grow"
                       onClick={() => navigate(`/slot/${slot}`)}

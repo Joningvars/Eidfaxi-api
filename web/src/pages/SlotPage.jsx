@@ -133,6 +133,14 @@ export default function SlotPage() {
   }
 
   const comps = state?.competitions || {};
+  const totalRows = COMPETITION_TYPES.reduce((sum, type) => {
+    const c =
+      comps[COMP_ID_BY_TYPE[type]] ||
+      comps[String(COMP_ID_BY_TYPE[type])] ||
+      {};
+    return sum + (c.leaderboardCount ?? 0);
+  }, 0);
+  const isLive = totalRows > 0;
   const apiBase = window.location.origin;
   const shortcuts = [];
   for (const type of COMPETITION_TYPES) {
@@ -157,9 +165,15 @@ export default function SlotPage() {
   return (
     <>
       <div className="card">
-        <div className="slot-num">Slot {slotNum}</div>
-        <h2 style={{ marginTop: 4 }}>{displayName}</h2>
-        <div className="slot-meta muted">eventId: {eventId}</div>
+        <div className="slot-head">
+          <span className="slot-num">Slot {slotNum}</span>
+          <span className={`badge ${isLive ? 'live' : 'idle'}`}>
+            <span className="dot" />
+            {isLive ? 'Með gögn' : 'Tómt'}
+          </span>
+        </div>
+        <h2 style={{ marginTop: 6 }}>{displayName}</h2>
+        <div className="slot-meta">eventId {eventId}</div>
 
         <label>Nafn á slot (t.d. bílnúmer)</label>
         <div className="row">
@@ -185,9 +199,9 @@ export default function SlotPage() {
               <div className="comp-box" key={type}>
                 <div className="comp-label">{COMP_LABELS[type]}</div>
                 {c.classId ? (
-                  <div className="stateval">{c.classId}</div>
+                  <div className="comp-val">{c.classId}</div>
                 ) : (
-                  <div className="stateval missing">ekki sett</div>
+                  <div className="comp-val missing">ekki sett</div>
                 )}
                 <div className="comp-count">
                   {c.leaderboardCount ?? 0} færslur

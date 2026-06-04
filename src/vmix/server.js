@@ -1204,11 +1204,10 @@ export async function resolveClassIdsForAllActiveEvents() {
 }
 
 export function registerVmixRoutes(app) {
+  // Legacy control panel route — now superseded by the React app at /app.
+  // Redirect any old bookmarks to the new UI.
   app.get('/control', (req, res) => {
-    if (!requireControlSession(req, res, false)) return;
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderControlHtml());
+    res.redirect('/app');
   });
 
   app.get('/event/current', resolveLegacyEvent, (req, res) => {
