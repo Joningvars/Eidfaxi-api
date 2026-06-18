@@ -56,6 +56,13 @@ export const api = {
       body: JSON.stringify({ eventId, name }),
     }).then(json),
 
+  addSlot: (eventId, name) =>
+    fetch('/events/add-slot', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ eventId, name }),
+    }).then(json),
+
   removeEvent: (eventId) =>
     fetch(`/events/${eventId}`, {
       method: 'DELETE',

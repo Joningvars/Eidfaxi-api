@@ -12,6 +12,7 @@ import {
   isEventActive,
   getEventCount,
   getEventClassIdGate,
+  getSlotKeysForSource,
 } from './vmix/event-registry.js';
 import { clearStartingListCache } from './vmix/vendor.js';
 import { log } from './logger.js';
@@ -112,7 +113,8 @@ function isAllowedEventId(payload) {
   if (!Number.isInteger(eventId) || eventId <= 0) {
     return false;
   }
-  return isEventActive(eventId);
+  // Allowed if any registered slot broadcasts this source event.
+  return getSlotKeysForSource(eventId).length > 0;
 }
 
 function isAllowedClassId(payload) {
@@ -216,20 +218,6 @@ async function handleWebhook(req, res, eventName) {
       return;
     }
 
-    if (!isAllowedClassId(payload)) {
-      const { classId: currentClassId } = getCompetitionMetadata();
-      log.webhook.filtered(payload.classId ?? 'N/A', currentClassId);
-      pushWebhookHistory({
-        status: 'classId_filtered',
-        eventName,
-        eventId: payload.eventId ?? null,
-        classId: payload.classId ?? null,
-        competitionId: payload.competitionId ?? null,
-        currentClassId: currentClassId ?? null,
-      });
-      return;
-    }
-
     let resolvedCompetitionId = payload.competitionId;
 
     if (!resolvedCompetitionId && payload.classId) {
@@ -241,22 +229,51 @@ async function handleWebhook(req, res, eventName) {
         eventName === 'event_raslisti_birtur' ||
         eventName === 'event_naesti_sprettur';
 
-      // Schedule per-event refresh via the multi-event refresh engine
-      try {
-        scheduleRefreshForEvent(
-          Number(payload.eventId),
-          Number(payload.classId),
-          Number(resolvedCompetitionId),
-          forceRefresh,
-        );
+      const sourceEventId = Number(payload.eventId);
+      const incomingClassId = Number(payload.classId);
+
+      // Fan out to every slot that broadcasts this source event. Each slot has
+      // its own classId gate, so two cars on the same event can show different
+      // classes — a slot only updates when the webhook's classId passes its gate.
+      const slotKeys = getSlotKeysForSource(sourceEventId);
+      let scheduledCount = 0;
+
+      for (const slotKeyId of slotKeys) {
+        const gate = getEventClassIdGate(slotKeyId);
+        // If the slot has a gate set, only matching classIds pass.
+        if (gate !== null && incomingClassId !== Number(gate)) {
+          continue;
+        }
+        try {
+          scheduleRefreshForEvent(
+            slotKeyId,
+            incomingClassId,
+            Number(resolvedCompetitionId),
+            forceRefresh,
+            sourceEventId,
+          );
+          scheduledCount += 1;
+        } catch (error) {
+          log.error('vMix refresh scheduling', error);
+        }
+      }
+
+      if (scheduledCount > 0) {
         log.vmix.scheduled(
           payload.eventId,
           payload.classId,
           resolvedCompetitionId,
           forceRefresh,
         );
-      } catch (error) {
-        log.error('vMix refresh scheduling', error);
+      } else {
+        // No slot accepted this classId — record as filtered for visibility.
+        pushWebhookHistory({
+          status: 'classId_filtered',
+          eventName,
+          eventId: payload.eventId ?? null,
+          classId: payload.classId ?? null,
+          competitionId: resolvedCompetitionId ?? null,
+        });
       }
     } else {
       log.vmix.noContext();

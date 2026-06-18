@@ -91,6 +91,22 @@ export default function Overview() {
     }
   }
 
+  // Add another car (slot) on the same source event.
+  async function addAnotherCar(ev) {
+    const sourceEventId = ev.sourceEventId ?? ev.eventId;
+    if (!window.confirm(`Bæta við öðrum bíl á mót ${sourceEventId}?`)) return;
+    setBusy(true);
+    try {
+      await api.addSlot(sourceEventId, ev.name || '');
+      setToast({ kind: 'ok', text: 'Nýr bíll búinn til á sama móti.' });
+      reloadEvents();
+    } catch (e) {
+      setToast({ kind: 'warn', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Slot users are not allowed on the overview.
   if (isAdmin === false) {
     return (
@@ -173,7 +189,14 @@ export default function Overview() {
                   <div className="slot-name">
                     {ev.label || ev.name || `Mót ${ev.eventId}`}
                   </div>
-                  <div className="slot-meta">eventId {ev.eventId}</div>
+                  <div className="slot-meta">
+                    eventId {ev.sourceEventId ?? ev.eventId}
+                    {(ev.sourceEventId ?? ev.eventId) !== ev.eventId && (
+                      <span className="badge idle" style={{ marginLeft: 8 }}>
+                        deilt mót
+                      </span>
+                    )}
+                  </div>
                   {(ev.loginUsername || ev.loginPassword) && (
                     <div className="creds">
                       <div className="creds-row">
@@ -213,6 +236,14 @@ export default function Overview() {
                       Fjarlægja
                     </button>
                   </div>
+                  <button
+                    className="ghost"
+                    style={{ marginTop: 4, width: '100%' }}
+                    onClick={() => addAnotherCar(ev)}
+                    disabled={busy || events.length >= 10}
+                  >
+                    + Bæta við bíl á sama mót
+                  </button>
                 </div>
               );
             })}

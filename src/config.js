@@ -22,16 +22,6 @@ export const DEBUG_LOGS = DEBUG_MODE;
 export const CONTROL_AUTH_USERNAME = process.env.CONTROL_AUTH_USERNAME || '';
 export const CONTROL_AUTH_PASSWORD = process.env.CONTROL_AUTH_PASSWORD || '';
 
-/**
- * Per-slot car logins. Configured via SLOT_LOGINS env var as a
- * semicolon-separated list of `username:password:slot` entries.
- *
- *   SLOT_LOGINS="bill1:leyni1:1;bill2:leyni2:2;bill3:leyni3:3"
- *
- * Each car operator logs in with their own credentials and can only see and
- * manage the slot number assigned to them. The CONTROL_AUTH_* admin login
- * continues to see and manage all slots.
- */
 function parseSlotLogins(raw) {
   const map = new Map();
   if (!raw) return map;

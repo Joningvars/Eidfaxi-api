@@ -37,6 +37,8 @@ import {
   setEventName,
   persistEventSlot,
   getSlotForEventId,
+  getSourceEventId,
+  addSlotForEvent,
 } from './event-registry.js';
 import { log } from '../logger.js';
 import JSZip from 'jszip';
@@ -1148,10 +1150,16 @@ function renderControlHtml() {
 /**
  * Fetch classIds from Sportfengur for an event and store them in the state.
  * This is called automatically when an event is registered.
+ *
+ * @param {number} slotKey - The registry/state key to store classIds under.
+ * @param {number} [sourceEventId] - The real Sportfengur event to fetch from.
+ *   Defaults to slotKey (normal case). For secondary slots this is the shared
+ *   source event.
  */
-async function resolveClassIdsForEvent(eventId) {
+async function resolveClassIdsForEvent(slotKey, sourceEventId = null) {
+  const fetchEventId = sourceEventId == null ? slotKey : sourceEventId;
   const data = await apiGetWithRetry(
-    `/${SPORTFENGUR_LOCALE}/event/tests/${eventId}`,
+    `/${SPORTFENGUR_LOCALE}/event/tests/${fetchEventId}`,
   );
   const tests = Array.isArray(data?.res) ? data.res : [];
 
@@ -1164,7 +1172,7 @@ async function resolveClassIdsForEvent(eventId) {
       firstWithName.mot_heiti ||
       firstWithName.motsheiti ||
       firstWithName.mot_nafn;
-    setEventName(eventId, name);
+    setEventName(slotKey, name);
   }
 
   for (const test of tests) {
@@ -1177,11 +1185,11 @@ async function resolveClassIdsForEvent(eventId) {
       Number.isInteger(classId) &&
       classId > 0
     ) {
-      setEventClassId(eventId, competitionId, classId);
+      setEventClassId(slotKey, competitionId, classId);
     }
   }
   // Persist the resolved classIds so they survive a restart
-  persistEventSlot(eventId);
+  persistEventSlot(slotKey);
 }
 
 /**
@@ -1193,7 +1201,7 @@ export async function resolveClassIdsForAllActiveEvents() {
   const events = getActiveEvents();
   for (const ev of events) {
     try {
-      await resolveClassIdsForEvent(ev.eventId);
+      await resolveClassIdsForEvent(ev.eventId, ev.sourceEventId ?? ev.eventId);
     } catch (err) {
       console.error(
         `[Event Registry] Failed to re-resolve classIds for event ${ev.eventId}:`,
@@ -1250,6 +1258,33 @@ export function registerVmixRoutes(app) {
           err.message,
         );
       });
+
+      res.setHeader('Content-Type', 'application/json');
+      res.json({ ok: true, event: entry });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  // Add an additional slot (second/third car) for an event that is already
+  // registered. The new slot has independent leaderboard data and its own
+  // classId gate, but fetches from the same source Sportfengur event.
+  app.post('/events/add-slot', async (req, res) => {
+    if (!requireAdmin(req, res, true)) return;
+    const sourceEventId = req.body?.eventId;
+    const name = req.body?.name || '';
+    try {
+      const entry = addSlotForEvent(sourceEventId, name);
+
+      // Resolve classIds from the SOURCE event for the new slot's state key
+      resolveClassIdsForEvent(entry.eventId, entry.sourceEventId).catch(
+        (err) => {
+          console.error(
+            `[Event Registry] Failed to resolve classIds for slot ${entry.eventId} (source ${entry.sourceEventId}):`,
+            err.message,
+          );
+        },
+      );
 
       res.setHeader('Content-Type', 'application/json');
       res.json({ ok: true, event: entry });
@@ -1646,8 +1681,9 @@ export function registerVmixRoutes(app) {
     }
 
     try {
+      const sourceEventId = getSourceEventId(eventId);
       const valid = await classBelongsToEventCompetition(
-        eventId,
+        sourceEventId,
         classId,
         competitionId,
       );
@@ -1660,7 +1696,13 @@ export function registerVmixRoutes(app) {
         });
       }
 
-      await refreshCompetitionNow(eventId, classId, competitionId, true);
+      await refreshCompetitionNow(
+        eventId,
+        classId,
+        competitionId,
+        true,
+        sourceEventId,
+      );
       const total = getLeaderboardForEvent(eventId, competitionId).length;
       res.json({
         ok: true,

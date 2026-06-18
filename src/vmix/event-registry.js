@@ -48,6 +48,7 @@ function snapshotSlots() {
     classIds: getEventCompetitionClassIds(entry.eventId),
     loginUsername: entry.loginUsername ?? null,
     loginPassword: entry.loginPassword ?? null,
+    sourceEventId: entry.sourceEventId ?? entry.eventId,
   }));
 }
 
@@ -58,6 +59,19 @@ function persist() {
   saveAllSlots(snapshotSlots()).catch(() => {
     // best-effort: persistence failures don't break the in-memory registry
   });
+}
+
+/**
+ * Generate a synthetic slot key for an additional slot on an event that is
+ * already registered. Synthetic keys are 7+ digits (eventId * 100 + n) so they
+ * never collide with real 5-6 digit Sportfengur eventIds.
+ */
+function nextSyntheticKey(sourceEventId) {
+  for (let n = 1; n < 100; n += 1) {
+    const candidate = sourceEventId * 100 + n;
+    if (!activeEvents.has(candidate)) return candidate;
+  }
+  throw new Error(`Cannot allocate slot key for event ${sourceEventId}`);
 }
 
 /**
@@ -74,6 +88,7 @@ export async function hydrateFromStore() {
   for (const slot of slots) {
     activeEvents.set(slot.eventId, {
       eventId: slot.eventId,
+      sourceEventId: slot.sourceEventId ?? slot.eventId,
       addedAt: new Date().toISOString(),
       name: slot.name || '',
       label: slot.label || '',
@@ -129,6 +144,7 @@ export function registerEvent(eventId, name) {
 
   const entry = {
     eventId: parsed,
+    sourceEventId: parsed,
     addedAt: new Date().toISOString(),
     name: name ? String(name) : '',
     label: '',
@@ -138,6 +154,64 @@ export function registerEvent(eventId, name) {
   initializeEventState(parsed);
   persist();
   return entry;
+}
+
+/**
+ * Add an additional slot that broadcasts an event already registered in
+ * another slot. The new slot has its own independent leaderboard state and
+ * classId gate, but fetches from the same Sportfengur event.
+ *
+ * @param {number} sourceEventId - The real Sportfengur event to broadcast
+ * @param {string} [name] - Optional display name
+ * @returns {object} The new slot entry (its `eventId` is a synthetic slot key)
+ * @throws {Error} If the source event is not registered or capacity reached
+ */
+export function addSlotForEvent(sourceEventId, name) {
+  const source = Number(sourceEventId);
+  if (!Number.isInteger(source) || source <= 0) {
+    throw new Error('Invalid sourceEventId: must be a positive integer');
+  }
+  if (activeEvents.size >= MAX_ACTIVE_EVENTS) {
+    throw new Error(
+      `Cannot add slot: maximum of ${MAX_ACTIVE_EVENTS} active slots reached`,
+    );
+  }
+
+  const key = nextSyntheticKey(source);
+  const entry = {
+    eventId: key,
+    sourceEventId: source,
+    addedAt: new Date().toISOString(),
+    name: name ? String(name) : '',
+    label: '',
+    ...generateCredentials(activeEvents.size + 1),
+  };
+  activeEvents.set(key, entry);
+  initializeEventState(key);
+
+  // Seed the new slot's classIds from the source event's resolved classIds
+  const sourceClassIds = getEventCompetitionClassIds(source);
+  for (const [compId, classId] of Object.entries(sourceClassIds)) {
+    const parsed = Number(classId);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      setEventClassId(key, Number(compId), parsed);
+    }
+  }
+
+  persist();
+  return entry;
+}
+
+/**
+ * Get the source (real Sportfengur) eventId for a given slot key.
+ * Falls back to the key itself if no slot is registered.
+ *
+ * @param {number} slotKey
+ * @returns {number}
+ */
+export function getSourceEventId(slotKey) {
+  const entry = activeEvents.get(Number(slotKey));
+  return entry ? (entry.sourceEventId ?? entry.eventId) : Number(slotKey);
 }
 
 /**
@@ -269,6 +343,24 @@ export function findSlotLogin(username) {
     }
   }
   return null;
+}
+
+/**
+ * Get the registry keys (slot keys) of all slots that broadcast the given
+ * source Sportfengur event. Used to fan out webhooks to every car on an event.
+ *
+ * @param {number} sourceEventId
+ * @returns {number[]} Array of slot keys (each usable as a state key)
+ */
+export function getSlotKeysForSource(sourceEventId) {
+  const source = Number(sourceEventId);
+  const keys = [];
+  for (const entry of activeEvents.values()) {
+    if ((entry.sourceEventId ?? entry.eventId) === source) {
+      keys.push(entry.eventId);
+    }
+  }
+  return keys;
 }
 
 /**
@@ -414,6 +506,7 @@ export function replaceEvent(oldEventId, newEventId, newName) {
 
   const newEntry = {
     eventId: newParsed,
+    sourceEventId: newParsed,
     addedAt: new Date().toISOString(),
     name: newName ? String(newName) : '',
     label,
