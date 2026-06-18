@@ -101,8 +101,10 @@ export function isRefreshInProgress(eventId, competitionId) {
  *
  * @param {number} eventId - The event identifier
  * @param {number} classId - The class identifier
- * @param {number} competitionId - The competition slot (1, 2, or 3)
+ * @param {number} competitionId - The competition slot to store under (1, 2, or 3)
  * @param {boolean} [forceRefresh=true] - Whether to force a cache refresh
+ * @param {number|null} [sourceEventId=null] - Real Sportfengur event id to fetch from (defaults to eventId)
+ * @param {number|null} [sourceCompetitionId=null] - Real Sportfengur competition number to fetch from (defaults to competitionId). Used e.g. for gæðingaskeið which lives on competition 5 in Sportfengur but must be stored under the forkeppni slot (1).
  * @returns {Promise<Array>} The normalized leaderboard data
  * @throws {Error} If a refresh is already in progress for this slot or concurrency limit reached
  */
@@ -112,6 +114,7 @@ export async function refreshCompetitionNow(
   competitionId,
   forceRefresh = true,
   sourceEventId = null,
+  sourceCompetitionId = null,
 ) {
   const key = slotKey(eventId, competitionId);
   const slot = getOrCreateSlot(key);
@@ -138,8 +141,14 @@ export async function refreshCompetitionNow(
   // real source event id.
   const fetchEventId = sourceEventId == null ? eventId : Number(sourceEventId);
 
+  // The Sportfengur competition number to actually fetch from. For a normal
+  // slot this equals the storage slot; for gæðingaskeið (Sportfengur comp 5)
+  // it differs, while the data is still stored under `competitionId` below.
+  const fetchCompetitionId =
+    sourceCompetitionId == null ? competitionId : Number(sourceCompetitionId);
+
   try {
-    log.vmix.fetching(classId, competitionId, forceRefresh);
+    log.vmix.fetching(classId, fetchCompetitionId, forceRefresh);
 
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(
@@ -151,7 +160,7 @@ export async function refreshCompetitionNow(
     const fetchPromise = fetchLeaderboard(
       fetchEventId,
       classId,
-      competitionId,
+      fetchCompetitionId,
       forceRefresh,
     );
 
