@@ -1681,46 +1681,21 @@ export function registerVmixRoutes(app) {
     }
 
     try {
-      // Skip the "belongs to competition" check when using the gate classId,
-      // because the gate may point to a class in a different Sportfengur
-      // competition number (e.g. Gæðingaskeið uses comp 4/5 but the slot
-      // button says "forkeppni"). The gate IS the user's explicit choice of
-      // what to fetch.
-      const usingGate = !bodyClassId && gateClassId && classId === gateClassId;
-      if (!usingGate) {
-        const sourceEventId = getSourceEventId(eventId);
-        const valid = await classBelongsToEventCompetition(
-          sourceEventId,
-          classId,
-          competitionId,
-        );
-        if (!valid) {
-          return res.status(400).json({
-            error: 'Class does not belong to selected event/competition',
-            eventId,
-            classId,
-            competitionType,
-          });
-        }
-      }
-
-      // When using the gate classId, the Sportfengur competition number may
-      // differ from the slot's competition type (e.g. Gæðingaskeið is comp 4/5
-      // on Sportfengur, but the operator hits "Uppfæra forkeppni" which is comp 1).
-      // Resolve the actual Sportfengur competition number for this classId.
+      // Resolve the correct Sportfengur competition number for this classId.
+      // The operator may have a gate set to a class that belongs to a different
+      // Sportfengur competition number than the button they pressed.
+      const sourceEv = getSourceEventId(eventId);
       let fetchCompetitionId = competitionId;
-      if (usingGate) {
-        const sourceEventId = getSourceEventId(eventId);
-        const testsData = await apiGetWithRetry(
-          `/${SPORTFENGUR_LOCALE}/event/tests/${sourceEventId}`,
-        );
-        const tests = Array.isArray(testsData?.res) ? testsData.res : [];
-        const match = tests.find(
-          (t) => Number(t.flokkar_numer) === Number(classId),
-        );
-        if (match?.keppni_numer != null) {
-          fetchCompetitionId = Number(match.keppni_numer);
-        }
+
+      const testsData = await apiGetWithRetry(
+        `/${SPORTFENGUR_LOCALE}/event/tests/${sourceEv}`,
+      );
+      const tests = Array.isArray(testsData?.res) ? testsData.res : [];
+      const match = tests.find(
+        (t) => Number(t.flokkar_numer) === Number(classId),
+      );
+      if (match?.keppni_numer != null) {
+        fetchCompetitionId = Number(match.keppni_numer);
       }
 
       await refreshCompetitionNow(
@@ -1728,7 +1703,7 @@ export function registerVmixRoutes(app) {
         classId,
         fetchCompetitionId,
         true,
-        sourceEventId,
+        sourceEv,
       );
       const total = getLeaderboardForEvent(eventId, competitionId).length;
       res.json({
@@ -2054,20 +2029,6 @@ export function registerVmixRoutes(app) {
     }
 
     try {
-      const valid = await classBelongsToEventCompetition(
-        eventId,
-        classId,
-        competitionId,
-      );
-      if (!valid) {
-        return res.status(400).json({
-          error: 'Class does not belong to selected event/competition',
-          eventId,
-          classId,
-          competitionType,
-        });
-      }
-
       await refreshCompetitionNow(eventId, classId, competitionId, true);
       const total = getLeaderboardState(competitionId).length;
       res.json({
