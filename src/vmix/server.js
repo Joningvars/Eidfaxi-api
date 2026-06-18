@@ -15,7 +15,12 @@ import {
   setEventIdFilter,
   SPORTFENGUR_LOCALE,
 } from '../config.js';
-import { requireControlSession } from '../control-auth.js';
+import {
+  requireControlSession,
+  requireAdmin,
+  canAccessSlot,
+  getRequestRole,
+} from '../control-auth.js';
 import { refreshCompetitionNow, isRefreshInProgress } from './refresh.js';
 import {
   registerEvent,
@@ -31,9 +36,23 @@ import {
   getEventClassIdGate,
   setEventName,
   persistEventSlot,
+  getSlotForEventId,
+  getSourceEventId,
+  addSlotForEvent,
 } from './event-registry.js';
 import { log } from '../logger.js';
 import JSZip from 'jszip';
+
+/**
+ * Authorization helper: can the current request manage the slot that the
+ * given eventId currently occupies? Admins can manage any slot; slot users
+ * only their own.
+ */
+function canAccessEventSlot(req, eventId) {
+  const slot = getSlotForEventId(eventId);
+  if (slot === null) return true; // not active yet — let route 404 naturally
+  return canAccessSlot(req, slot);
+}
 
 const COMPETITION_TYPE_TO_ID = {
   forkeppni: 1,
@@ -1131,10 +1150,16 @@ function renderControlHtml() {
 /**
  * Fetch classIds from Sportfengur for an event and store them in the state.
  * This is called automatically when an event is registered.
+ *
+ * @param {number} slotKey - The registry/state key to store classIds under.
+ * @param {number} [sourceEventId] - The real Sportfengur event to fetch from.
+ *   Defaults to slotKey (normal case). For secondary slots this is the shared
+ *   source event.
  */
-async function resolveClassIdsForEvent(eventId) {
+async function resolveClassIdsForEvent(slotKey, sourceEventId = null) {
+  const fetchEventId = sourceEventId == null ? slotKey : sourceEventId;
   const data = await apiGetWithRetry(
-    `/${SPORTFENGUR_LOCALE}/event/tests/${eventId}`,
+    `/${SPORTFENGUR_LOCALE}/event/tests/${fetchEventId}`,
   );
   const tests = Array.isArray(data?.res) ? data.res : [];
 
@@ -1147,7 +1172,7 @@ async function resolveClassIdsForEvent(eventId) {
       firstWithName.mot_heiti ||
       firstWithName.motsheiti ||
       firstWithName.mot_nafn;
-    setEventName(eventId, name);
+    setEventName(slotKey, name);
   }
 
   for (const test of tests) {
@@ -1160,11 +1185,11 @@ async function resolveClassIdsForEvent(eventId) {
       Number.isInteger(classId) &&
       classId > 0
     ) {
-      setEventClassId(eventId, competitionId, classId);
+      setEventClassId(slotKey, competitionId, classId);
     }
   }
   // Persist the resolved classIds so they survive a restart
-  persistEventSlot(eventId);
+  persistEventSlot(slotKey);
 }
 
 /**
@@ -1176,7 +1201,7 @@ export async function resolveClassIdsForAllActiveEvents() {
   const events = getActiveEvents();
   for (const ev of events) {
     try {
-      await resolveClassIdsForEvent(ev.eventId);
+      await resolveClassIdsForEvent(ev.eventId, ev.sourceEventId ?? ev.eventId);
     } catch (err) {
       console.error(
         `[Event Registry] Failed to re-resolve classIds for event ${ev.eventId}:`,
@@ -1187,11 +1212,10 @@ export async function resolveClassIdsForAllActiveEvents() {
 }
 
 export function registerVmixRoutes(app) {
+  // Legacy control panel route — now superseded by the React app at /app.
+  // Redirect any old bookmarks to the new UI.
   app.get('/control', (req, res) => {
-    if (!requireControlSession(req, res, false)) return;
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderControlHtml());
+    res.redirect('/app');
   });
 
   app.get('/event/current', resolveLegacyEvent, (req, res) => {
@@ -1221,7 +1245,7 @@ export function registerVmixRoutes(app) {
   // --- Event Management API Routes ---
 
   app.post('/events/register', async (req, res) => {
-    if (!requireControlSession(req, res, true)) return;
+    if (!requireAdmin(req, res, true)) return;
     const eventId = req.body?.eventId;
     const name = req.body?.name || '';
     try {
@@ -1242,8 +1266,35 @@ export function registerVmixRoutes(app) {
     }
   });
 
+  // Add an additional slot (second/third car) for an event that is already
+  // registered. The new slot has independent leaderboard data and its own
+  // classId gate, but fetches from the same source Sportfengur event.
+  app.post('/events/add-slot', async (req, res) => {
+    if (!requireAdmin(req, res, true)) return;
+    const sourceEventId = req.body?.eventId;
+    const name = req.body?.name || '';
+    try {
+      const entry = addSlotForEvent(sourceEventId, name);
+
+      // Resolve classIds from the SOURCE event for the new slot's state key
+      resolveClassIdsForEvent(entry.eventId, entry.sourceEventId).catch(
+        (err) => {
+          console.error(
+            `[Event Registry] Failed to resolve classIds for slot ${entry.eventId} (source ${entry.sourceEventId}):`,
+            err.message,
+          );
+        },
+      );
+
+      res.setHeader('Content-Type', 'application/json');
+      res.json({ ok: true, event: entry });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
   app.delete('/events/:eventId', (req, res) => {
-    if (!requireControlSession(req, res, true)) return;
+    if (!requireAdmin(req, res, true)) return;
     const eventId = Number(req.params.eventId);
     if (!Number.isInteger(eventId) || eventId <= 0) {
       return res
@@ -1266,6 +1317,9 @@ export function registerVmixRoutes(app) {
     if (!Number.isInteger(eventId) || eventId <= 0) {
       return res.status(400).json({ error: 'Invalid eventId' });
     }
+    if (!canAccessEventSlot(req, eventId)) {
+      return res.status(403).json({ error: 'Forbidden: not your slot' });
+    }
     const label = String(req.body?.label ?? '');
     const updated = updateEventLabel(eventId, label);
     if (!updated) {
@@ -1277,7 +1331,7 @@ export function registerVmixRoutes(app) {
   });
 
   app.patch('/events/:eventId/replace', async (req, res) => {
-    if (!requireControlSession(req, res, true)) return;
+    if (!requireAdmin(req, res, true)) return;
     const oldEventId = Number(req.params.eventId);
     const newEventId = req.body?.eventId;
     const newName = req.body?.name || '';
@@ -1304,6 +1358,9 @@ export function registerVmixRoutes(app) {
     if (!Number.isInteger(eventId) || eventId <= 0) {
       return res.status(400).json({ error: 'Invalid eventId' });
     }
+    if (!canAccessEventSlot(req, eventId)) {
+      return res.status(403).json({ error: 'Forbidden: not your slot' });
+    }
     const classId =
       req.body?.classId === null || req.body?.classId === ''
         ? null
@@ -1321,6 +1378,7 @@ export function registerVmixRoutes(app) {
   });
 
   app.get('/events/:eventId/gate', (req, res) => {
+    if (!requireControlSession(req, res, true)) return;
     const eventId = Number(req.params.eventId);
     if (!Number.isInteger(eventId) || eventId <= 0) {
       return res.status(400).json({ error: 'Invalid eventId' });
@@ -1330,13 +1388,30 @@ export function registerVmixRoutes(app) {
   });
 
   app.get('/events', (req, res) => {
-    const events = getActiveEventsWithSlots();
+    if (!requireControlSession(req, res, true)) return;
+    let events = getActiveEventsWithSlots();
+    // Slot users only see their own slot; admins see all.
+    const role = getRequestRole(req);
+    const isAdmin = role && role.role === 'admin';
+    if (role && role.role === 'slot') {
+      events = events.filter((e) => Number(e.slot) === Number(role.slot));
+    }
+    // Only admins receive the login password; strip it for everyone else.
+    events = events.map((e) => {
+      const out = { ...e };
+      if (!isAdmin) {
+        delete out.loginPassword;
+        delete out.loginUsername;
+      }
+      return out;
+    });
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/json');
     res.json({ events });
   });
 
   app.get('/events/state', (req, res) => {
+    if (!requireControlSession(req, res, true)) return;
     const metadata = getAllEventsMetadata();
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/json');
@@ -1344,6 +1419,7 @@ export function registerVmixRoutes(app) {
   });
 
   app.get('/event/:eventId/state', (req, res) => {
+    if (!requireControlSession(req, res, true)) return;
     const eventId = Number(req.params.eventId);
     if (!Number.isInteger(eventId) || eventId <= 0) {
       return res
@@ -1567,6 +1643,11 @@ export function registerVmixRoutes(app) {
     const eventId = validateEventId(req, res);
     if (eventId === null) return;
 
+    // Slot users may only refresh their own slot
+    if (!canAccessEventSlot(req, eventId)) {
+      return res.status(403).json({ error: 'Forbidden: not your slot' });
+    }
+
     const scope = validateCompetitionType(req, res);
     if (!scope) return;
     const { competitionType, competitionId } = scope;
@@ -1600,8 +1681,9 @@ export function registerVmixRoutes(app) {
     }
 
     try {
+      const sourceEventId = getSourceEventId(eventId);
       const valid = await classBelongsToEventCompetition(
-        eventId,
+        sourceEventId,
         classId,
         competitionId,
       );
@@ -1614,7 +1696,13 @@ export function registerVmixRoutes(app) {
         });
       }
 
-      await refreshCompetitionNow(eventId, classId, competitionId, true);
+      await refreshCompetitionNow(
+        eventId,
+        classId,
+        competitionId,
+        true,
+        sourceEventId,
+      );
       const total = getLeaderboardForEvent(eventId, competitionId).length;
       res.json({
         ok: true,

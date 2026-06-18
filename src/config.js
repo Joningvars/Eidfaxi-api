@@ -21,6 +21,28 @@ export const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
 export const DEBUG_LOGS = DEBUG_MODE;
 export const CONTROL_AUTH_USERNAME = process.env.CONTROL_AUTH_USERNAME || '';
 export const CONTROL_AUTH_PASSWORD = process.env.CONTROL_AUTH_PASSWORD || '';
+
+function parseSlotLogins(raw) {
+  const map = new Map();
+  if (!raw) return map;
+  for (const entry of String(raw).split(';')) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(':');
+    if (parts.length < 3) continue;
+    const username = parts[0].trim();
+    const password = parts[1].trim();
+    const slot = Number.parseInt(parts[2].trim(), 10);
+    if (!username || !password || !Number.isInteger(slot) || slot <= 0) {
+      continue;
+    }
+    map.set(username, { username, password, slot });
+  }
+  return map;
+}
+
+export const SLOT_LOGINS = parseSlotLogins(process.env.SLOT_LOGINS);
+
 const parsedEventId = Number(
   process.env.EVENT_ID_FILTER ?? process.env.EVENT_ID,
 );

@@ -1,5 +1,7 @@
 import './src/logger.js';
 import express from 'express';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   registerHealthRoute,
   registerRootRoute,
@@ -10,8 +12,14 @@ import {
   registerControlWebhookRoutes,
 } from './src/webhooks.js';
 import { registerDocs } from './src/docs.js';
-import { registerControlAuthRoutes } from './src/control-auth.js';
-import { registerVmixRoutes, resolveClassIdsForAllActiveEvents } from './src/vmix/server.js';
+import {
+  registerControlAuthRoutes,
+  requireControlSession,
+} from './src/control-auth.js';
+import {
+  registerVmixRoutes,
+  resolveClassIdsForAllActiveEvents,
+} from './src/vmix/server.js';
 import { registerRosterRoutes } from './src/roster-routes.js';
 import { registerEvent, hydrateFromStore } from './src/vmix/event-registry.js';
 import { initializeState } from './src/vmix/state.js';
@@ -78,6 +86,24 @@ registerDocs(app);
 registerControlAuthRoutes(app);
 registerVmixRoutes(app);
 registerRosterRoutes(app);
+
+// --- Serve the built Vite React control app at /app ---
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const webDist = path.join(__dirname, 'web', 'dist');
+
+// The SPA bundle (HTML/JS/CSS) is served openly — it contains no secrets.
+// Auth is enforced two ways:
+//   1. Every data API (/events, /event/*, etc.) requires a control session.
+//   2. The React app calls /control/me on load; on 401 it routes to /login.
+// Gating the static bundle here caused a redirect loop with /app/login.
+app.use('/app', express.static(webDist));
+
+// SPA fallback: any /app/* route that isn't a static file serves index.html
+app.get('/app/{*splat}', (req, res, next) => {
+  res.sendFile(path.join(webDist, 'index.html'), (err) => {
+    if (err) next();
+  });
+});
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

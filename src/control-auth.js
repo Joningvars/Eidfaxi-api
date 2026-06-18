@@ -1,8 +1,14 @@
 import crypto from 'crypto';
-import { CONTROL_AUTH_USERNAME, CONTROL_AUTH_PASSWORD } from './config.js';
+import {
+  CONTROL_AUTH_USERNAME,
+  CONTROL_AUTH_PASSWORD,
+  SLOT_LOGINS,
+} from './config.js';
+import { findSlotLogin } from './vmix/event-registry.js';
 
 const SESSION_COOKIE = 'eidfaxi_control_session';
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+// token -> { expiresAt, role: 'admin'|'slot', slot: number|null }
 const sessions = new Map();
 
 function now() {
@@ -11,8 +17,8 @@ function now() {
 
 function pruneSessions() {
   const t = now();
-  for (const [token, expiresAt] of sessions.entries()) {
-    if (expiresAt <= t) sessions.delete(token);
+  for (const [token, sess] of sessions.entries()) {
+    if (!sess || sess.expiresAt <= t) sessions.delete(token);
   }
 }
 
@@ -34,16 +40,37 @@ function getSessionToken(req) {
   return cookies[SESSION_COOKIE] || '';
 }
 
-function isAuthenticated(req) {
+/**
+ * Return the active session object for a request, or null.
+ * Session shape: { expiresAt, role: 'admin'|'slot', slot: number|null }
+ */
+function getActiveSession(req) {
   pruneSessions();
   const token = getSessionToken(req);
-  if (!token) return false;
-  const expiresAt = sessions.get(token);
-  if (!expiresAt || expiresAt <= now()) {
+  if (!token) return null;
+  const sess = sessions.get(token);
+  if (!sess || sess.expiresAt <= now()) {
     sessions.delete(token);
-    return false;
+    return null;
   }
-  return true;
+  return sess;
+}
+
+function isAuthenticated(req) {
+  return getActiveSession(req) !== null;
+}
+
+/**
+ * Resolve the role/slot for a request, considering both cookie sessions and
+ * HTTP Basic auth (admin only, for API/vMix tooling).
+ *
+ * @returns {{ role: 'admin'|'slot', slot: number|null } | null}
+ */
+export function getRequestRole(req) {
+  const sess = getActiveSession(req);
+  if (sess) return { role: sess.role, slot: sess.slot ?? null };
+  if (isBasicAuthenticated(req)) return { role: 'admin', slot: null };
+  return null;
 }
 
 function isBasicAuthenticated(req) {
@@ -142,50 +169,145 @@ export function requireControlSession(req, res, api = false) {
   return false;
 }
 
+/**
+ * Require an admin session (full access to all slots).
+ * For API routes, responds 401/403; for pages, redirects to login.
+ */
+export function requireAdmin(req, res, api = false) {
+  const role = getRequestRole(req);
+  if (role && role.role === 'admin') return true;
+  if (!role) {
+    if (api) {
+      res.status(401).json({ error: 'Unauthorized' });
+    } else {
+      res.redirect('/control/login');
+    }
+    return false;
+  }
+  // Authenticated but not admin
+  res.status(403).json({ error: 'Forbidden: admin access required' });
+  return false;
+}
+
+/**
+ * Check whether the request is allowed to access a given slot number.
+ * Admins can access any slot; slot users only their own.
+ *
+ * @returns {boolean}
+ */
+export function canAccessSlot(req, slot) {
+  const role = getRequestRole(req);
+  if (!role) return false;
+  if (role.role === 'admin') return true;
+  return Number(role.slot) === Number(slot);
+}
+
 export function registerControlAuthRoutes(app) {
+  // The login UI now lives in the React app at /app/login. Keep this GET
+  // route as a redirect so existing links / the auth-guard redirect still work.
   app.get('/control/login', (req, res) => {
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderLoginHtml());
+    res.redirect('/app/login');
   });
 
   app.post('/control/login', (req, res) => {
-    if (!CONTROL_AUTH_USERNAME || !CONTROL_AUTH_PASSWORD) {
+    const wantsJson =
+      String(req.header('accept') || '').includes('application/json') ||
+      String(req.header('content-type') || '').includes('application/json');
+
+    const hasAdmin = CONTROL_AUTH_USERNAME && CONTROL_AUTH_PASSWORD;
+    const hasSlotLogins = SLOT_LOGINS.size > 0;
+
+    if (!hasAdmin && !hasSlotLogins) {
+      const msg =
+        'Innskraning er ekki stillt. Settu CONTROL_AUTH_USERNAME og CONTROL_AUTH_PASSWORD (eða SLOT_LOGINS) í env.';
+      if (wantsJson) {
+        return res.status(500).json({ ok: false, error: msg });
+      }
       res.status(500);
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(
-        renderLoginHtml(
-          'Innskraning er ekki stillt. Settu CONTROL_AUTH_USERNAME og CONTROL_AUTH_PASSWORD í env.',
-        ),
-      );
+      res.send(renderLoginHtml(msg));
       return;
     }
 
     const username = String(req.body?.username || '').trim();
     const password = String(req.body?.password || '');
 
+    let role = null;
+    let slot = null;
+
     if (
-      username !== CONTROL_AUTH_USERNAME ||
-      password !== CONTROL_AUTH_PASSWORD
+      hasAdmin &&
+      username === CONTROL_AUTH_USERNAME &&
+      password === CONTROL_AUTH_PASSWORD
     ) {
+      role = 'admin';
+    } else if (hasSlotLogins && SLOT_LOGINS.has(username)) {
+      const entry = SLOT_LOGINS.get(username);
+      if (entry.password === password) {
+        role = 'slot';
+        slot = entry.slot;
+      }
+    }
+
+    // Fall back to dynamically-generated slot logins from the registry
+    if (!role) {
+      const dynamic = findSlotLogin(username);
+      if (dynamic && dynamic.password && dynamic.password === password) {
+        role = 'slot';
+        slot = dynamic.slot;
+      }
+    }
+
+    if (!role) {
+      const msg = 'Rangt notandanafn eða lykilorð.';
+      if (wantsJson) {
+        return res.status(401).json({ ok: false, error: msg });
+      }
       res.status(401);
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(renderLoginHtml('Rangt notandanafn eða lykilorð.'));
+      res.send(renderLoginHtml(msg));
       return;
     }
 
     const token = crypto.randomBytes(24).toString('hex');
-    sessions.set(token, now() + SESSION_TTL_MS);
+    sessions.set(token, { expiresAt: now() + SESSION_TTL_MS, role, slot });
     setSessionCookie(res, token);
-    res.redirect('/control');
+
+    const redirectTo = role === 'slot' ? `/app/slot/${slot}` : '/app';
+
+    if (wantsJson) {
+      return res.json({ ok: true, role, slot, redirectTo });
+    }
+
+    // Slot users go straight to their slot page; admins to the overview.
+    res.redirect(redirectTo);
   });
 
-  app.post('/control/logout', (req, res) => {
+  const handleLogout = (req, res) => {
     const token = getSessionToken(req);
     if (token) sessions.delete(token);
     clearSessionCookie(res);
-    res.redirect('/control/login');
+    const wantsJson =
+      String(req.header('accept') || '').includes('application/json') ||
+      String(req.header('content-type') || '').includes('application/json');
+    if (wantsJson) {
+      return res.json({ ok: true });
+    }
+    res.redirect('/app/login');
+  };
+
+  app.post('/control/logout', handleLogout);
+  app.get('/control/logout', handleLogout);
+
+  // Lightweight endpoint for the SPA to discover its role and allowed slot.
+  app.get('/control/me', (req, res) => {
+    const role = getRequestRole(req);
+    res.setHeader('Cache-Control', 'no-store');
+    if (!role) {
+      return res.status(401).json({ authenticated: false });
+    }
+    res.json({ authenticated: true, role: role.role, slot: role.slot });
   });
 }

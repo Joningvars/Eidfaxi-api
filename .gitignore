@@ -6,6 +6,10 @@ pkg
 pkg@5.8.1
 sportfengur-webhooks@1.0.0
 
+# Web build (built on deploy)
+web/node_modules/
+web/dist/
+
 # Test files
 *.test.js
 **/*.test.js

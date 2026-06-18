@@ -111,6 +111,7 @@ export async function refreshCompetitionNow(
   classId,
   competitionId,
   forceRefresh = true,
+  sourceEventId = null,
 ) {
   const key = slotKey(eventId, competitionId);
   const slot = getOrCreateSlot(key);
@@ -132,6 +133,11 @@ export async function refreshCompetitionNow(
   // Mark slot as in-progress
   slot.inProgress = true;
 
+  // The Sportfengur event to actually fetch from. For a normal slot this is
+  // the same as the state key; for a secondary slot sharing an event it's the
+  // real source event id.
+  const fetchEventId = sourceEventId == null ? eventId : Number(sourceEventId);
+
   try {
     log.vmix.fetching(classId, competitionId, forceRefresh);
 
@@ -143,7 +149,7 @@ export async function refreshCompetitionNow(
     });
 
     const fetchPromise = fetchLeaderboard(
-      eventId,
+      fetchEventId,
       classId,
       competitionId,
       forceRefresh,
@@ -153,7 +159,7 @@ export async function refreshCompetitionNow(
     const normalizedLeaderboard = normalizeLeaderboard(leaderboardData);
     log.vmix.normalized(normalizedLeaderboard.length);
 
-    // Update per-event state
+    // Update per-event state (keyed by the slot key, not the source event)
     updateEventState(eventId, competitionId, normalizedLeaderboard, classId);
 
     // Also update legacy state for backward compatibility
@@ -190,6 +196,7 @@ export function scheduleRefreshForEvent(
   classId,
   competitionId,
   forceRefresh = false,
+  sourceEventId = null,
 ) {
   const key = slotKey(eventId, competitionId);
   const slot = getOrCreateSlot(key);
@@ -216,6 +223,7 @@ export function scheduleRefreshForEvent(
         classId,
         competitionId,
         forceRefresh,
+        sourceEventId,
       );
       log.vmix.updated();
     } catch (error) {

@@ -178,6 +178,30 @@ const migrations = [
         ON vmix_event_slots (slot_order);
     `,
   },
+  {
+    name: '007_add_slot_login_credentials',
+    sql: `
+      ALTER TABLE vmix_event_slots
+        ADD COLUMN IF NOT EXISTS login_username TEXT,
+        ADD COLUMN IF NOT EXISTS login_password TEXT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS vmix_event_slots_login_username_unique
+        ON vmix_event_slots (login_username)
+        WHERE login_username IS NOT NULL;
+    `,
+  },
+  {
+    name: '008_add_slot_source_event_id',
+    sql: `
+      ALTER TABLE vmix_event_slots
+        ADD COLUMN IF NOT EXISTS source_event_id BIGINT;
+
+      -- Backfill: existing slots source from their own event_id
+      UPDATE vmix_event_slots
+        SET source_event_id = event_id
+        WHERE source_event_id IS NULL;
+    `,
+  },
 ];
 
 export async function runMigrations() {
