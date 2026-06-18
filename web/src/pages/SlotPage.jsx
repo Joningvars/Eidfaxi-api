@@ -77,6 +77,15 @@ export default function SlotPage() {
     return out;
   }, [tests]);
 
+  // Load event search options for the swap dropdown (must be before early return)
+  useEffect(() => {
+    const year = new Date().getFullYear();
+    api
+      .searchEvents(year, swapCountry)
+      .then((data) => setSwapOptions(normalizeSearchResults(data)))
+      .catch(() => setSwapOptions([]));
+  }, [swapCountry]);
+
   if (!ev) {
     return (
       <div className="card empty">
@@ -99,15 +108,6 @@ export default function SlotPage() {
       setBusy(false);
     }
   }
-
-  // Load event search options for the swap dropdown
-  useEffect(() => {
-    const year = new Date().getFullYear();
-    api
-      .searchEvents(year, swapCountry)
-      .then((data) => setSwapOptions(normalizeSearchResults(data)))
-      .catch(() => setSwapOptions([]));
-  }, [swapCountry]);
 
   async function swapEvent() {
     const newEventId = Number.parseInt(String(swapSelected), 10);
