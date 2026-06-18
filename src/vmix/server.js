@@ -2029,7 +2029,20 @@ export function registerVmixRoutes(app) {
     }
 
     try {
-      await refreshCompetitionNow(eventId, classId, competitionId, true);
+      // Resolve the real Sportfengur competition number for this classId.
+      let fetchCompetitionId = competitionId;
+      const testsData = await apiGetWithRetry(
+        `/${SPORTFENGUR_LOCALE}/event/tests/${eventId}`,
+      );
+      const testsArr = Array.isArray(testsData?.res) ? testsData.res : [];
+      const classMatch = testsArr.find(
+        (t) => Number(t.flokkar_numer) === Number(classId),
+      );
+      if (classMatch?.keppni_numer != null) {
+        fetchCompetitionId = Number(classMatch.keppni_numer);
+      }
+
+      await refreshCompetitionNow(eventId, classId, fetchCompetitionId, true);
       const total = getLeaderboardState(competitionId).length;
       res.json({
         ok: true,
