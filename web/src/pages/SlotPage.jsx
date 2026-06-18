@@ -45,9 +45,12 @@ export default function SlotPage() {
 
   useEffect(() => {
     if (!eventId) return;
+    // For the tests/gate calls, use the source event (real Sportfengur ID)
+    // since synthetic slot keys don't exist on Sportfengur.
+    const sourceId = ev?.sourceEventId ?? eventId;
     loadState();
     api
-      .getTests(eventId)
+      .getTests(sourceId)
       .then((d) => setTests(Array.isArray(d?.res) ? d.res : []))
       .catch(() => setTests([]));
     api
@@ -156,6 +159,12 @@ export default function SlotPage() {
       const data = await api.refresh(eventId, type, cid);
       setResult({ kind: 'ok', text: JSON.stringify(data, null, 2) });
       loadState();
+      // Reload class options for the gate dropdown
+      const sourceId = ev?.sourceEventId ?? eventId;
+      api
+        .getTests(sourceId)
+        .then((d) => setTests(Array.isArray(d?.res) ? d.res : []))
+        .catch(() => {});
     } catch (e) {
       setResult({ kind: 'warn', text: e.message });
     } finally {

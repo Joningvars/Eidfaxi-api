@@ -236,14 +236,6 @@ export default function Overview() {
                       Fjarlægja
                     </button>
                   </div>
-                  <button
-                    className="ghost"
-                    style={{ marginTop: 4, width: '100%' }}
-                    onClick={() => addAnotherCar(ev)}
-                    disabled={busy || events.length >= 10}
-                  >
-                    + Bæta við bíl á sama mót
-                  </button>
                 </div>
               );
             })}
