@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useParams, useOutletContext, Link } from 'react-router-dom';
-import { api, COMPETITION_TYPES } from '../api.js';
+import { api, COMPETITION_TYPES, normalizeSearchResults } from '../api.js';
 
 const COMP_LABELS = {
   forkeppni: 'forkeppni',
@@ -27,6 +27,9 @@ export default function SlotPage() {
   const [manualClassId, setManualClassId] = useState('');
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [swapOptions, setSwapOptions] = useState([]);
+  const [swapSelected, setSwapSelected] = useState('');
+  const [swapCountry, setSwapCountry] = useState('IS');
 
   const loadState = useCallback(() => {
     if (!eventId) return;
@@ -90,6 +93,34 @@ export default function SlotPage() {
       await api.setLabel(eventId, labelInput.trim());
       reloadEvents();
       setResult({ kind: 'ok', text: 'Nafn vistað.' });
+    } catch (e) {
+      setResult({ kind: 'warn', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Load event search options for the swap dropdown
+  useEffect(() => {
+    const year = new Date().getFullYear();
+    api
+      .searchEvents(year, swapCountry)
+      .then((data) => setSwapOptions(normalizeSearchResults(data)))
+      .catch(() => setSwapOptions([]));
+  }, [swapCountry]);
+
+  async function swapEvent() {
+    const newEventId = Number.parseInt(String(swapSelected), 10);
+    if (!Number.isInteger(newEventId) || newEventId <= 0) {
+      setResult({ kind: 'warn', text: 'Veldu mót til að skipta yfir á.' });
+      return;
+    }
+    const opt = swapOptions.find((o) => o.eventId === newEventId);
+    setBusy(true);
+    try {
+      await api.replaceEvent(eventId, newEventId, opt?.name || '');
+      setResult({ kind: 'ok', text: 'Mót skipt!' });
+      reloadEvents();
     } catch (e) {
       setResult({ kind: 'warn', text: e.message });
     } finally {
@@ -185,6 +216,37 @@ export default function SlotPage() {
           />
           <button className="secondary" onClick={saveLabel} disabled={busy}>
             Vista nafn
+          </button>
+        </div>
+
+        <label style={{ marginTop: 12 }}>Skipta um mót á þessu sloti</label>
+        <div className="row">
+          <select
+            style={{ width: 100 }}
+            value={swapCountry}
+            onChange={(e) => setSwapCountry(e.target.value)}
+          >
+            <option value="IS">IS</option>
+            <option value="SE">SE</option>
+            <option value="DK">DK</option>
+            <option value="NO">NO</option>
+            <option value="">Öll</option>
+          </select>
+          <select
+            className="grow"
+            value={swapSelected}
+            onChange={(e) => setSwapSelected(e.target.value)}
+          >
+            <option value="">Veldu nýtt mót...</option>
+            {swapOptions.map((o) => (
+              <option key={o.eventId} value={o.eventId}>
+                {o.eventId} - {o.name}
+                {o.startsAt ? ` (${o.startsAt})` : ''}
+              </option>
+            ))}
+          </select>
+          <button className="secondary" onClick={swapEvent} disabled={busy}>
+            Skipta
           </button>
         </div>
       </div>
