@@ -31,6 +31,12 @@ export default function SlotPage() {
   const [swapSelected, setSwapSelected] = useState('');
   const [swapCountry, setSwapCountry] = useState('IS');
 
+  // Default the swap dropdown to the current source event
+  useEffect(() => {
+    const sourceId = ev?.sourceEventId ?? ev?.eventId;
+    if (sourceId) setSwapSelected(String(sourceId));
+  }, [ev?.sourceEventId, ev?.eventId]);
+
   const loadState = useCallback(() => {
     if (!eventId) return;
     api
@@ -241,19 +247,39 @@ export default function SlotPage() {
             <option value="NO">NO</option>
             <option value="">Öll</option>
           </select>
-          <select
-            className="grow"
-            value={swapSelected}
-            onChange={(e) => setSwapSelected(e.target.value)}
-          >
-            <option value="">Veldu nýtt mót...</option>
-            {swapOptions.map((o) => (
-              <option key={o.eventId} value={o.eventId}>
-                {o.eventId} - {o.name}
-                {o.startsAt ? ` (${o.startsAt})` : ''}
-              </option>
-            ))}
-          </select>
+          {swapOptions.length > 0 ? (
+            <select
+              className="grow"
+              value={swapSelected}
+              onChange={(e) => setSwapSelected(e.target.value)}
+            >
+              <option value="">Veldu nýtt mót...</option>
+              {/* Ensure the current event is always in the list */}
+              {(ev?.sourceEventId ?? ev?.eventId) &&
+                !swapOptions.some(
+                  (o) => o.eventId === (ev?.sourceEventId ?? ev?.eventId),
+                ) && (
+                  <option value={ev?.sourceEventId ?? ev?.eventId}>
+                    {ev?.sourceEventId ?? ev?.eventId} -{' '}
+                    {ev?.name || 'Núverandi mót'}
+                  </option>
+                )}
+              {swapOptions.map((o) => (
+                <option key={o.eventId} value={o.eventId}>
+                  {o.eventId} - {o.name}
+                  {o.startsAt ? ` (${o.startsAt})` : ''}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              className="grow"
+              type="number"
+              placeholder="Sláðu inn eventId handvirkt..."
+              value={swapSelected}
+              onChange={(e) => setSwapSelected(e.target.value)}
+            />
+          )}
           <button className="secondary" onClick={swapEvent} disabled={busy}>
             Skipta
           </button>
