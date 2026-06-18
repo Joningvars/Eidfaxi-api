@@ -396,6 +396,53 @@ function resolveMultiEventRequest(req, res, defaultSort = 'start') {
   };
 }
 
+/**
+ * Map a pressed vMix slot (1=forkeppni, 2=a-urslit, 3=b-urslit) to the real
+ * Sportfengur competition number to fetch for a given class.
+ *
+ * Standard events: the class has a test row whose keppni_numer equals the
+ * pressed slot (1/2/3) — use it directly.
+ *
+ * Multi-heat events (gæðingaskeið): the class has no 1/2/3 rows, only sprettir
+ * (e.g. keppni_numer 4,5,6...). The Sportfengur API does not return these in a
+ * reliable order and unopened heats have an empty starting list, so we pick the
+ * first OPENED heat (lowest keppni_rod among keppni_opnud===1), falling back to
+ * the lowest-rod heat if none are flagged open.
+ *
+ * @param {Array<{flokkar_numer:number, keppni_numer:number, keppni_rod:number, keppni_opnud:number}>} tests
+ * @param {number} classId
+ * @param {number} requestedCompetitionId - the pressed slot (1/2/3)
+ * @returns {number} the Sportfengur competition number to fetch from
+ */
+export function resolveFetchCompetitionId(
+  tests,
+  classId,
+  requestedCompetitionId,
+) {
+  const classTests = (Array.isArray(tests) ? tests : []).filter(
+    (t) => Number(t.flokkar_numer) === Number(classId),
+  );
+  if (classTests.length === 0) return requestedCompetitionId;
+
+  // Standard event: pressed slot maps directly to a real competition number.
+  const directMatch = classTests.find(
+    (t) => Number(t.keppni_numer) === Number(requestedCompetitionId),
+  );
+  if (directMatch && directMatch.keppni_numer != null) {
+    return Number(directMatch.keppni_numer);
+  }
+
+  // Multi-heat event (gæðingaskeið): pick the first opened spretti.
+  const byRod = (a, b) => Number(a.keppni_rod) - Number(b.keppni_rod);
+  const opened = classTests
+    .filter((t) => Number(t.keppni_opnud) === 1)
+    .sort(byRod);
+  const chosen = opened[0] ?? [...classTests].sort(byRod)[0];
+  return chosen?.keppni_numer != null
+    ? Number(chosen.keppni_numer)
+    : requestedCompetitionId;
+}
+
 async function classBelongsToEventCompetition(eventId, classId, competitionId) {
   const data = await apiGetWithRetry(
     `/${SPORTFENGUR_LOCALE}/event/tests/${eventId}`,
@@ -1685,25 +1732,28 @@ export function registerVmixRoutes(app) {
       // The operator may have a gate set to a class that belongs to a different
       // Sportfengur competition number than the button they pressed.
       const sourceEv = getSourceEventId(eventId);
-      let fetchCompetitionId = competitionId;
 
       const testsData = await apiGetWithRetry(
         `/${SPORTFENGUR_LOCALE}/event/tests/${sourceEv}`,
       );
       const tests = Array.isArray(testsData?.res) ? testsData.res : [];
-      const match = tests.find(
-        (t) => Number(t.flokkar_numer) === Number(classId),
+      const fetchCompetitionId = resolveFetchCompetitionId(
+        tests,
+        classId,
+        competitionId,
       );
-      if (match?.keppni_numer != null) {
-        fetchCompetitionId = Number(match.keppni_numer);
-      }
 
+      // Fetch from Sportfengur using the resolved competition number, but
+      // store under the display competition slot (1=forkeppni, 2=a-urslit, 3=b-urslit)
+      // so the data appears at the expected vMix endpoint. For gæðingaskeið the
+      // Sportfengur competition number (e.g. 5) differs from the storage slot (1).
       await refreshCompetitionNow(
         eventId,
         classId,
-        fetchCompetitionId,
+        competitionId,
         true,
         sourceEv,
+        fetchCompetitionId,
       );
       const total = getLeaderboardForEvent(eventId, competitionId).length;
       res.json({
@@ -1712,6 +1762,7 @@ export function registerVmixRoutes(app) {
         classId,
         competitionType,
         competitionId,
+        fetchCompetitionId,
         total,
       });
     } catch (error) {
@@ -2030,19 +2081,27 @@ export function registerVmixRoutes(app) {
 
     try {
       // Resolve the real Sportfengur competition number for this classId.
-      let fetchCompetitionId = competitionId;
       const testsData = await apiGetWithRetry(
         `/${SPORTFENGUR_LOCALE}/event/tests/${eventId}`,
       );
       const testsArr = Array.isArray(testsData?.res) ? testsData.res : [];
-      const classMatch = testsArr.find(
-        (t) => Number(t.flokkar_numer) === Number(classId),
+      const fetchCompetitionId = resolveFetchCompetitionId(
+        testsArr,
+        classId,
+        competitionId,
       );
-      if (classMatch?.keppni_numer != null) {
-        fetchCompetitionId = Number(classMatch.keppni_numer);
-      }
 
-      await refreshCompetitionNow(eventId, classId, fetchCompetitionId, true);
+      // Store under the display slot (competitionId) but fetch from the real
+      // Sportfengur competition number (fetchCompetitionId) — these differ for
+      // gæðingaskeið (Sportfengur comp 5 stored under forkeppni slot 1).
+      await refreshCompetitionNow(
+        eventId,
+        classId,
+        competitionId,
+        true,
+        null,
+        fetchCompetitionId,
+      );
       const total = getLeaderboardState(competitionId).length;
       res.json({
         ok: true,
@@ -2050,6 +2109,7 @@ export function registerVmixRoutes(app) {
         classId,
         competitionType,
         competitionId,
+        fetchCompetitionId,
         total,
       });
     } catch (error) {
