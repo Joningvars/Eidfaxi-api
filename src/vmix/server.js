@@ -1704,10 +1704,29 @@ export function registerVmixRoutes(app) {
         }
       }
 
+      // When using the gate classId, the Sportfengur competition number may
+      // differ from the slot's competition type (e.g. Gæðingaskeið is comp 4/5
+      // on Sportfengur, but the operator hits "Uppfæra forkeppni" which is comp 1).
+      // Resolve the actual Sportfengur competition number for this classId.
+      let fetchCompetitionId = competitionId;
+      if (usingGate) {
+        const sourceEventId = getSourceEventId(eventId);
+        const testsData = await apiGetWithRetry(
+          `/${SPORTFENGUR_LOCALE}/event/tests/${sourceEventId}`,
+        );
+        const tests = Array.isArray(testsData?.res) ? testsData.res : [];
+        const match = tests.find(
+          (t) => Number(t.flokkar_numer) === Number(classId),
+        );
+        if (match?.keppni_numer != null) {
+          fetchCompetitionId = Number(match.keppni_numer);
+        }
+      }
+
       await refreshCompetitionNow(
         eventId,
         classId,
-        competitionId,
+        fetchCompetitionId,
         true,
         sourceEventId,
       );
