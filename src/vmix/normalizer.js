@@ -51,12 +51,14 @@ function averageForDisplay(scores) {
 
 function getDisplayTotalScore(entry) {
   // In tie-break situations SportFengur provides 5-judge average here.
-  if (
-    entry?.keppandi_einkunn_5_ds !== null &&
-    entry?.keppandi_einkunn_5_ds !== undefined &&
-    entry?.keppandi_einkunn_5_ds !== ''
-  ) {
-    return entry.keppandi_einkunn_5_ds;
+  // Guard against non-numeric truthy values (objects, arrays) that some
+  // competition types return.
+  const fiveDs = entry?.keppandi_einkunn_5_ds;
+  if (fiveDs !== null && fiveDs !== undefined && fiveDs !== '') {
+    const num = Number(String(fiveDs).replace(',', '.'));
+    if (Number.isFinite(num)) {
+      return num;
+    }
   }
   return entry?.keppandi_medaleinkunn;
 }
