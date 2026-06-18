@@ -1664,15 +1664,16 @@ export function registerVmixRoutes(app) {
     const bodyClassId =
       req.body?.classId == null ? null : parsePositiveInt(req.body.classId);
 
-    // classId resolution priority:
+    // classId resolution priority for manual refresh:
     // 1. Explicit classId in request body (manual override)
-    // 2. The gated classId for this event (if a gate is set)
-    // 3. The classId stored in state for this competition
-    const gateClassId = getEventClassIdGate(eventId);
-    const eventState = getEventState(eventId);
+    // 2. The classId stored in state for this competition
+    // NOTE: The gate classId is NOT used here — it's for webhook filtering only,
+    // not for determining what to fetch. A gate filters incoming webhooks but
+    // doesn't change which class a manual refresh fetches.
+    const eventStateData = getEventState(eventId);
     const stateClassId =
-      eventState?.competitions?.[competitionId]?.classId || null;
-    const classId = bodyClassId ?? gateClassId ?? stateClassId;
+      eventStateData?.competitions?.[competitionId]?.classId || null;
+    const classId = bodyClassId ?? stateClassId;
 
     if (!classId) {
       return res
