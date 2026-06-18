@@ -1666,14 +1666,13 @@ export function registerVmixRoutes(app) {
 
     // classId resolution priority for manual refresh:
     // 1. Explicit classId in request body (manual override)
-    // 2. The classId stored in state for this competition
-    // NOTE: The gate classId is NOT used here — it's for webhook filtering only,
-    // not for determining what to fetch. A gate filters incoming webhooks but
-    // doesn't change which class a manual refresh fetches.
+    // 2. The gated classId for this event (same class used for webhook filtering)
+    // 3. The classId stored in state for this competition
+    const gateClassId = getEventClassIdGate(eventId);
     const eventStateData = getEventState(eventId);
     const stateClassId =
       eventStateData?.competitions?.[competitionId]?.classId || null;
-    const classId = bodyClassId ?? stateClassId;
+    const classId = bodyClassId ?? gateClassId ?? stateClassId;
 
     if (!classId) {
       return res
@@ -1682,19 +1681,27 @@ export function registerVmixRoutes(app) {
     }
 
     try {
-      const sourceEventId = getSourceEventId(eventId);
-      const valid = await classBelongsToEventCompetition(
-        sourceEventId,
-        classId,
-        competitionId,
-      );
-      if (!valid) {
-        return res.status(400).json({
-          error: 'Class does not belong to selected event/competition',
-          eventId,
+      // Skip the "belongs to competition" check when using the gate classId,
+      // because the gate may point to a class in a different Sportfengur
+      // competition number (e.g. Gæðingaskeið uses comp 4/5 but the slot
+      // button says "forkeppni"). The gate IS the user's explicit choice of
+      // what to fetch.
+      const usingGate = !bodyClassId && gateClassId && classId === gateClassId;
+      if (!usingGate) {
+        const sourceEventId = getSourceEventId(eventId);
+        const valid = await classBelongsToEventCompetition(
+          sourceEventId,
           classId,
-          competitionType,
-        });
+          competitionId,
+        );
+        if (!valid) {
+          return res.status(400).json({
+            error: 'Class does not belong to selected event/competition',
+            eventId,
+            classId,
+            competitionType,
+          });
+        }
       }
 
       await refreshCompetitionNow(
