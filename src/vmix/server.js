@@ -77,7 +77,7 @@ function withUtf8Bom(text) {
   return `\uFEFF${text}`;
 }
 
-function extractGangtegundResults(currentState, sort = 'start') {
+export function extractGangtegundResults(currentState, sort = 'start') {
   const rowsByGait = new Map();
   const excludeKeys = new Set([
     'Nr',
@@ -130,6 +130,37 @@ function extractGangtegundResults(currentState, sort = 'start') {
       rowsByGait.get(key).push(row);
     }
   });
+
+  // Fallback for competitions with no gait breakdown (gæðingaskeið / skeið):
+  // emit one row per rider from the overall marks, using the exact same row
+  // shape as the gait rows above, so /results stays empty-of-changes for the
+  // vMix graphics and simply works for these competitions too.
+  if (rowsByGait.size === 0) {
+    currentState.forEach((rider) => {
+      const adal = rider.adal || {};
+      const row = {
+        gangtegundKey: 'heild',
+        title: 'Heild',
+        name: rider.Knapi,
+        horse: rider.Hestur,
+        color: rider.LiturRas || '',
+        colorHex: getColorHex(rider.LiturRas),
+        Nr: rider.Nr,
+        Saeti: rider.Saeti,
+        pos: '',
+        E1: adal.E1 || '',
+        E2: adal.E2 || '',
+        E3: adal.E3 || '',
+        E4: adal.E4 || '',
+        E5: adal.E5 || '',
+        E6: adal.E6 || '',
+      };
+      if (!rowsByGait.has('heild')) {
+        rowsByGait.set('heild', []);
+      }
+      rowsByGait.get('heild').push(row);
+    });
+  }
 
   const gaitKeys = [...rowsByGait.keys()].sort((a, b) => a.localeCompare(b));
   const output = [];

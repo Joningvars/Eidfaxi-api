@@ -33,6 +33,29 @@ function roundScore(value, fixedTwoDecimals = false) {
   return text;
 }
 
+/**
+ * Split a judge array into real judge marks and a speed/time value.
+ *
+ * Judge main marks (`domari_adaleinkunn`) are on a 0–10 scale. Skeið and
+ * gæðingaskeið record a speed/time in one of the judge slots instead of a mark —
+ * it shows up as a value greater than 10. We drop those out so they do not
+ * pollute the E1–E5 judge columns; the remaining real marks fill E1..En.
+ *
+ * @param {Array<{domari_adaleinkunn?: any}>} judges
+ * @returns {string[]} the real judge marks (max 5)
+ */
+function judgeMarksOnly(judges) {
+  const marks = [];
+  for (const judge of Array.isArray(judges) ? judges : []) {
+    const raw = judge?.domari_adaleinkunn;
+    const num = Number(String(raw ?? '').trim().replace(',', '.'));
+    // Skip speed/time values (> 10) — they are not judge marks.
+    if (Number.isFinite(num) && num > 10) continue;
+    marks.push(roundScore(raw));
+  }
+  return marks.slice(0, 5);
+}
+
 function averageForDisplay(scores) {
   if (!Array.isArray(scores) || scores.length === 0) return null;
 
@@ -222,9 +245,7 @@ export function normalizeCurrent(apiResponse) {
   const judges = Array.isArray(apiResponse.einkunnir_domara)
     ? apiResponse.einkunnir_domara
     : [];
-  const judgeScores = judges
-    .slice(0, 5)
-    .map((j) => roundScore(j?.domari_adaleinkunn));
+  const judgeScores = judgeMarksOnly(judges);
 
   const gaitScores = extractGaitScores(judges);
   const e1 = judgeScores[0] || '';
@@ -299,9 +320,7 @@ export function normalizeLeaderboard(apiResponse) {
       const judges = Array.isArray(entry.einkunnir_domara)
         ? entry.einkunnir_domara
         : [];
-      const judgeScores = judges
-        .slice(0, 5)
-        .map((j) => roundScore(j?.domari_adaleinkunn));
+      const judgeScores = judgeMarksOnly(judges);
 
       const gaitScores = extractGaitScores(judges);
       const e1 = judgeScores[0] || '';
