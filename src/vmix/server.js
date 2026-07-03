@@ -7,8 +7,15 @@ import {
   getEventState,
   getAllEventsMetadata,
   setEventClassId,
+  setEventClassType,
+  getEventClassType,
 } from './state.js';
 import { leaderboardToCsv } from './normalizer.js';
+import {
+  classifyClassType,
+  getClassTypePolicy,
+  finalsSeatCount,
+} from './class-type.js';
 import { apiGetWithRetry } from '../sportfengur.js';
 import {
   getEventIdFilter,
@@ -200,6 +207,92 @@ export function extractGangtegundResults(currentState, sort = 'start') {
   return output;
 }
 
+/**
+ * Build a fixed-order start-list / results row for a normalized entry, honoring
+ * the per-Class_Type field order (Requirement 8, design Component 7 "Row
+ * ordering", Correctness Property 10).
+ *
+ * The normalizer has already mapped the competitor / secondary / club into the
+ * canonical `Knapi` / `Hestur` / `Lid` fields for the entry's Class_Type:
+ *   - competitor-horse mode (Adult_Quality_Class): horse → `Knapi`,
+ *     rider → `Hestur`, horse club → `Lid`.
+ *   - rider-primary mode (Younger_Quality_Class, Sport_Tolt_Class,
+ *     Gaedingaskeid_Class): rider → `Knapi`, horse → `Hestur`,
+ *     rider club → `Lid`.
+ * buildOrderedRow therefore maps those canonical fields into their fixed
+ * positional order and appends the trailing score field. The same ordering is
+ * applied to BOTH the start-list and results outputs.
+ *
+ * Fixed field order (position 1 → 4):
+ *   Adult_Quality_Class:                horse name, rider name, horse club, Final_Score
+ *   Younger_Quality_Class / Sport_Tolt: rider name, horse name, rider club, Final_Score
+ *   Gaedingaskeid_Class:                rider name, horse name, rider club, Speed_Time
+ *
+ * Because the values are already canonicalized, positions 1–3 (`name`, `horse`,
+ * `Lid`) are read uniformly from `Knapi` / `Hestur` / `Lid`; only the trailing
+ * score differs — the gæðingaskeið Speed_Time (`TIME`) for the gæðingaskeið
+ * layout, and the Final_Score (canonical `E6`) for every other layout.
+ *
+ * Any unavailable value is emitted as an empty string in its fixed position;
+ * fields are never dropped or shifted (Requirement 8.5).
+ *
+ * @param {object} entry a normalized leaderboard entry (canonical Knapi/Hestur/Lid)
+ * @param {string} classType one of ClassType.* (unknown/missing → default policy)
+ * @returns {{ name: string, horse: string, Lid: string, einkunn: string }}
+ *
+ * Requirements: 8.1, 8.2, 8.3, 8.5
+ */
+export function buildOrderedRow(entry, classType) {
+  const source = entry && typeof entry === 'object' ? entry : {};
+  const policy = getClassTypePolicy(classType);
+
+  // Position 4 is the gæðingaskeið Speed_Time for the gæðingaskeið layout and
+  // the Final_Score (canonical E6) for every other layout.
+  const score = policy.layout === 'gaedingaskeid' ? source.TIME : source.E6;
+
+  // Insert keys in the fixed positional order so the row's field order is
+  // identical for the start-list and results outputs.
+  return {
+    name: source.Knapi || '',
+    horse: source.Hestur || '',
+    Lid: source.Lid || '',
+    einkunn: score || '',
+  };
+}
+
+/**
+ * RaslistiForkeppni start-list variant (Requirement 8.4, design Component 7
+ * "RaslistiForkeppni", Correctness Property 11).
+ *
+ * Given a default start-list schema row (the shape produced by
+ * `buildOrderedRow`: `{ name, horse, Lid, einkunn }`), swap ONLY the rider and
+ * horse name field *values* (`name` ⇄ `horse`). The club (`Lid`) and every
+ * other field are left byte-for-byte unchanged in value and position; the key
+ * order of the row is preserved because `name`/`horse` already exist on the
+ * default schema and are only reassigned, not re-inserted.
+ *
+ * This is a thin, purely positional transform layered on top of the canonical
+ * start-list row — it does NOT re-read the class-type policy or re-map fields.
+ * A non-object input yields an empty default row so callers never throw.
+ *
+ * @param {{ name?: string, horse?: string, Lid?: string, einkunn?: string }} row
+ * @returns {{ name: string, horse: string, Lid: string, einkunn: string }}
+ *
+ * Requirements: 8.4
+ */
+export function swapNameFields(row) {
+  const source = row && typeof row === 'object' ? row : {};
+  // Spread first so all other fields (Lid, einkunn, any extras) keep their
+  // value AND position, then overwrite only the two name values with each
+  // other. Because `name` and `horse` already exist on the default schema,
+  // reassigning them does not change their position in the row.
+  return {
+    ...source,
+    name: source.horse || '',
+    horse: source.name || '',
+  };
+}
+
 function sortLeaderboard(entries, sort) {
   const mode = sort === 'rank' ? 'rank' : sort === 'teams' ? 'teams' : 'start';
   return [...entries].sort((a, b) => {
@@ -264,6 +357,57 @@ function chunkEntries(entries, size) {
     groups.push(entries.slice(i, i + chunkSize));
   }
   return groups;
+}
+
+/**
+ * Build a fully-empty finals seat row matching the shape produced by
+ * `buildOrderedRow` (`{ name, horse, Lid, einkunn }`), every field blank.
+ * Used to pad a finals output up to its Class_Type seat count.
+ *
+ * @returns {{ name: string, horse: string, Lid: string, einkunn: string }}
+ */
+function emptySeatRow() {
+  return { name: '', horse: '', Lid: '', einkunn: '' };
+}
+
+/**
+ * Normalize a finals row list to exactly `seatCount` seats (design Component 7
+ * "Finals seats", Correctness Property 12, Requirements 9.1–9.4).
+ *
+ * `rows` are expected to already be ordered by finishing position (top finisher
+ * first) as produced by `buildOrderedRow` over a rank-sorted leaderboard:
+ *   - MORE rows than seats → keep only the top `seatCount` finishers, drop the
+ *     rest.
+ *   - FEWER rows than seats → pad with fully-empty seat objects so the output
+ *     always has exactly `seatCount` seats.
+ *
+ * The seat count comes from `finalsSeatCount(classType)` (8 for quality, 5 for
+ * tölt). When `seatCount` is not a positive integer (e.g. a Class_Type without
+ * a defined finals seat count) the rows are returned unchanged so the function
+ * is total and never fabricates seats for non-finals classes.
+ *
+ * @param {Array<object>} rows        ordered finals rows (finishing position order)
+ * @param {number} seatCount          target seat count (8 | 5)
+ * @returns {Array<object>} exactly `seatCount` seat rows (or `rows` unchanged
+ *   when `seatCount` is not a positive integer)
+ *
+ * Requirements: 9.1, 9.2, 9.3, 9.4
+ */
+function padToSeats(rows, seatCount) {
+  const source = Array.isArray(rows) ? rows : [];
+  if (!Number.isInteger(seatCount) || seatCount <= 0) return source;
+
+  if (source.length >= seatCount) {
+    // More (or equal) finishers than seats: keep the top `seatCount`.
+    return source.slice(0, seatCount);
+  }
+
+  // Fewer finishers than seats: pad the remainder with empty seats.
+  const padded = source.slice();
+  while (padded.length < seatCount) {
+    padded.push(emptySeatRow());
+  }
+  return padded;
 }
 
 function resolveCompetitionScope(req, res) {
@@ -1264,6 +1408,16 @@ async function resolveClassIdsForEvent(slotKey, sourceEventId = null) {
       classId > 0
     ) {
       setEventClassId(slotKey, competitionId, classId);
+
+      // Resolve and store the Class_Type for this competition slot so the
+      // normalizer/server can apply the correct Landsmót rules. Classification
+      // is a pure function of the class name and discipline text taken from the
+      // Sportfengur test row (Requirements 1.1, 1.6).
+      const classType = classifyClassType({
+        className: test?.flokkur_nafn,
+        disciplineText: test?.keppnisgrein,
+      });
+      setEventClassType(slotKey, competitionId, classType);
     }
   }
   // Persist the resolved classIds so they survive a restart
@@ -1701,6 +1855,49 @@ export function registerVmixRoutes(app) {
     res.send(csv);
   });
 
+  app.get('/event/:eventId/:competitionType/raslisti-forkeppni', (req, res) => {
+    const resolved = resolveMultiEventRequest(req, res);
+    if (!resolved) return;
+    const { eventId, competitionType, competitionId, sort, sorted } = resolved;
+    const classType = getEventClassType(eventId, competitionId);
+    // Build the canonical, class-type-ordered start-list rows, then apply the
+    // RaslistiForkeppni name swap (rider ⇄ horse values only). Club and score
+    // stay in their default positions.
+    const rows = sorted.map((entry) =>
+      swapNameFields(buildOrderedRow(entry, classType)),
+    );
+    log.server.endpoint(
+      `/event/${eventId}/${competitionType}/raslisti-forkeppni?sort=${sort}`,
+      rows.length,
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json');
+    res.json(rows);
+  });
+
+  app.get('/event/:eventId/:competitionType/finals', (req, res) => {
+    // Finals output (a-úrslit / b-úrslit): class-type-ordered rows padded or
+    // truncated to the Class_Type finals seat count (8 quality / 5 tölt)
+    // instead of the fixed groups chunk of 7. Default sort is 'rank' so
+    // truncation keeps the top finishers by finishing position.
+    const resolved = resolveMultiEventRequest(req, res, 'rank');
+    if (!resolved) return;
+    const { eventId, competitionType, competitionId, sort, sorted } = resolved;
+    const classType = getEventClassType(eventId, competitionId);
+    const seatCount = finalsSeatCount(classType);
+    const rows = padToSeats(
+      sorted.map((entry) => buildOrderedRow(entry, classType)),
+      seatCount,
+    );
+    log.server.endpoint(
+      `/event/${eventId}/${competitionType}/finals?sort=${sort}`,
+      rows.length,
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json');
+    res.json(rows);
+  });
+
   app.get('/event/:eventId/:competitionType/results', (req, res) => {
     const resolved = resolveMultiEventRequest(req, res, 'start');
     if (!resolved) return;
@@ -2074,6 +2271,28 @@ export function registerVmixRoutes(app) {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'application/json');
     res.json(results);
+  });
+
+  app.get('/event/:competitionType/finals', resolveLegacyEvent, (req, res) => {
+    // Legacy single-event finals output: same seat-padding behavior as the
+    // multi-event finals route, resolving the event via legacy resolution.
+    const resolved = resolveCompetitionRequest(req, res, 'rank');
+    if (!resolved) return;
+    const { competitionType, competitionId, sort, sorted } = resolved;
+    const eventId = req.resolvedEventId;
+    const classType = getEventClassType(eventId, competitionId);
+    const seatCount = finalsSeatCount(classType);
+    const rows = padToSeats(
+      sorted.map((entry) => buildOrderedRow(entry, classType)),
+      seatCount,
+    );
+    log.server.endpoint(
+      `/event/${competitionType}/finals?sort=${sort}`,
+      rows.length,
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/json');
+    res.json(rows);
   });
 
   app.post('/event/:competitionType/refresh', async (req, res) => {

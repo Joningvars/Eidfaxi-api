@@ -4,6 +4,8 @@ import {
   removeEventState,
   setEventClassId,
   getEventCompetitionClassIds,
+  setEventClassType,
+  getEventCompetitionClassTypes,
 } from './state.js';
 import { cancelRefreshesForEvent } from './refresh.js';
 import { saveAllSlots, saveSlot, loadSlots } from './slot-store.js';
@@ -46,6 +48,7 @@ function snapshotSlots() {
     name: entry.name || '',
     allowedClassId: entry.allowedClassId ?? null,
     classIds: getEventCompetitionClassIds(entry.eventId),
+    classTypes: getEventCompetitionClassTypes(entry.eventId),
     loginUsername: entry.loginUsername ?? null,
     loginPassword: entry.loginPassword ?? null,
     sourceEventId: entry.sourceEventId ?? entry.eventId,
@@ -103,6 +106,15 @@ export async function hydrateFromStore() {
       const parsed = Number(classId);
       if (Number.isInteger(parsed) && parsed > 0) {
         setEventClassId(slot.eventId, Number(compId), parsed);
+      }
+    }
+    // Restore per-competition Class_Types from DB. Records that predate the
+    // classTypes field simply omit it; state.js defaults each slot to
+    // DEFAULT_CLASS_TYPE on read, so hydration stays backward compatible.
+    const classTypes = slot.classTypes || {};
+    for (const [compId, classType] of Object.entries(classTypes)) {
+      if (typeof classType === 'string' && classType) {
+        setEventClassType(slot.eventId, Number(compId), classType);
       }
     }
   }
@@ -454,6 +466,7 @@ export function persistEventSlot(eventId) {
     name: entry.name || '',
     allowedClassId: entry.allowedClassId ?? null,
     classIds: getEventCompetitionClassIds(parsed),
+    classTypes: getEventCompetitionClassTypes(parsed),
     loginUsername: entry.loginUsername ?? null,
     loginPassword: entry.loginPassword ?? null,
   }).catch(() => {

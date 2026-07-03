@@ -1,3 +1,63 @@
+import {
+  getClassTypePolicy,
+  applyFieldMapping,
+  formatDecimals,
+  averageMarks,
+  formatSpeedTime,
+  scaleSpeedTime,
+  positionColorName,
+} from './class-type.js';
+
+/**
+ * The 3-color preliminary palette used when more than one entry is on course
+ * or during a special preliminary. Takes precedence over the class-type palette
+ * (Requirements 11.3, 11.4).
+ */
+const PRELIMINARY_PALETTE = ['red', 'yellow', 'green'];
+
+/**
+ * Resolve the rider club feeding the rider-primary `Lid` mapping. Today the
+ * rider's registered club lives in `adildarfelag_knapa`; kept in one place so
+ * the field-mapping call sites stay readable.
+ *
+ * @param {object} entry Sportfengur entry / current-competitor payload
+ * @returns {string}
+ */
+function resolveRiderClub(entry) {
+  return String(entry?.adildarfelag_knapa || '');
+}
+
+/**
+ * Resolve the horse club feeding the competitor-horse `Lid` mapping (adult
+ * quality classes). The exact Sportfengur field name is not yet confirmed, so
+ * an ordered candidate list is used with the owner's club as the final
+ * fallback (design: roster-enrichment horse-club sourcing / task 7.1). Emits
+ * an empty string when no candidate is present.
+ *
+ * @param {object} entry Sportfengur entry / current-competitor payload
+ * @returns {string}
+ */
+function resolveHorseClub(entry) {
+  return String(
+    entry?.adildarfelag_hross ||
+      entry?.hross_adildarfelag ||
+      entry?.adildarfelag_eiganda ||
+      '',
+  );
+}
+
+/**
+ * Legacy `Lid` value used by the pre-Landsmót (default / Sport_Tolt) path. The
+ * default path must remain byte-for-byte identical, so `Lid` keeps sourcing
+ * from the team-name fields when no Class_Type context is supplied.
+ *
+ * @param {object} entry Sportfengur entry / current-competitor payload
+ * @returns {string}
+ */
+function resolveLegacyLid(entry) {
+  return String(entry?.lid || entry?.Lid || entry?.team_name || '');
+}
+
 function calculateAldur(faedingarnumer) {
   if (!faedingarnumer || typeof faedingarnumer !== 'string') return '';
   const match = faedingarnumer.match(/(\d{4})/);
@@ -48,12 +108,207 @@ function judgeMarksOnly(judges) {
   const marks = [];
   for (const judge of Array.isArray(judges) ? judges : []) {
     const raw = judge?.domari_adaleinkunn;
-    const num = Number(String(raw ?? '').trim().replace(',', '.'));
+    const num = Number(
+      String(raw ?? '')
+        .trim()
+        .replace(',', '.'),
+    );
     // Skip speed/time values (> 10) — they are not judge marks.
     if (Number.isFinite(num) && num > 10) continue;
     marks.push(roundScore(raw));
   }
   return marks.slice(0, 5);
+}
+
+/**
+ * Collect the raw (unformatted) real judge marks for the policy-driven path.
+ *
+ * Mirrors `judgeMarksOnly`'s speed/time filtering (values > 10 are a
+ * skeið/gæðingaskeið time, not a judge mark) but returns the *raw* values so
+ * the caller can format them with `formatDecimals(value, policy.judgeDecimals)`
+ * and average them with `averageMarks(marks, policy.averaging)` at full
+ * precision (avoids double-rounding through `roundScore`). Non-numeric / blank
+ * entries are passed through unchanged; `formatDecimals`/`averageMarks` treat
+ * them as unavailable.
+ *
+ * @param {Array<{domari_adaleinkunn?: any}>} judges
+ * @returns {any[]} the raw real judge marks (max 5)
+ */
+function rawJudgeMarks(judges) {
+  const marks = [];
+  for (const judge of Array.isArray(judges) ? judges : []) {
+    const raw = judge?.domari_adaleinkunn;
+    const num = Number(
+      String(raw ?? '')
+        .trim()
+        .replace(',', '.'),
+    );
+    // Skip speed/time values (> 10) — they are not judge marks.
+    if (Number.isFinite(num) && num > 10) continue;
+    marks.push(raw);
+  }
+  return marks.slice(0, 5);
+}
+
+/**
+ * Split a gæðingaskeið judge array into the four real Judge_Marks and the
+ * single Speed_Time. The Speed_Time is recorded in one of the judge slots as a
+ * value greater than 10; the remaining slots hold the real 0–10 marks. Returns
+ * the *raw* values so the caller can format marks with `formatDecimals` and the
+ * time via `formatSpeedTime(scaleSpeedTime(...))` (Requirements 7.1–7.3).
+ *
+ * @param {Array<{domari_adaleinkunn?: any}>} judges
+ * @returns {{ marks: any[], speed: any }} up to four raw marks + the raw speed
+ *   (`null` when no speed value is present)
+ */
+function splitGaedingaskeid(judges) {
+  const marks = [];
+  let speed = null;
+  for (const judge of Array.isArray(judges) ? judges : []) {
+    const raw = judge?.domari_adaleinkunn;
+    const num = Number(
+      String(raw ?? '')
+        .trim()
+        .replace(',', '.'),
+    );
+    if (Number.isFinite(num) && num > 10) {
+      // First speed value (> 10) fills the TIME slot; ignore any extras.
+      if (speed === null) speed = raw;
+      continue;
+    }
+    marks.push(raw);
+  }
+  return { marks: marks.slice(0, 4), speed };
+}
+
+/**
+ * Collect judges 1..5 verbatim (no speed filtering, no reordering) for the
+ * B-úrslit real-score path. Returns the raw values so the caller can format
+ * each present value at two decimals and emit an empty string for
+ * missing/blank/non-numeric slots (Requirements 10.1, 10.2).
+ *
+ * @param {Array<{domari_adaleinkunn?: any}>} judges
+ * @returns {any[]} up to five raw judge values in slot order
+ */
+function allJudgeMarks(judges) {
+  const marks = [];
+  for (const judge of Array.isArray(judges) ? judges : []) {
+    marks.push(judge?.domari_adaleinkunn);
+  }
+  return marks.slice(0, 5);
+}
+
+/**
+ * Extract the leading integer position from a Ras_Color value such as
+ * `"1 - Rauður"`. Returns `NaN` when no leading integer is present so
+ * `positionColorName` (a total function) emits an empty color name for absent /
+ * malformed values (Requirement 11.5).
+ *
+ * @param {*} liturRas
+ * @returns {number} the position integer, or NaN when unparseable
+ */
+function positionFromRasColor(liturRas) {
+  const match = String(liturRas ?? '')
+    .trim()
+    .match(/^(\d+)/);
+  return match ? Number(match[1]) : NaN;
+}
+
+/**
+ * Compute the context-aware (Class_Type-driven) judge/score fields for a single
+ * entry. Only called on the explicit-context path; the default / no-context
+ * path is handled inline and stays byte-for-byte identical.
+ *
+ * Three sub-modes, in precedence order:
+ *   1. B-úrslit (`context.competitionId === 3`): judges 1..5 map directly to
+ *      slots E1..E5 with NO drop and NO speed filtering, each present value at
+ *      two decimals, empty for missing/blank/non-numeric; E6 is the finals
+ *      average (sum ÷ 5) at two decimals (Requirements 10.1–10.3, 9.5, 9.6).
+ *   2. Gæðingaskeið (`policy.layout === 'gaedingaskeid'`): separate the single
+ *      Speed_Time (value > 10) from the four real marks, emit ordered
+ *      `D1, D2, D3, TIME, D5` + `Final`; marks at one decimal, TIME via
+ *      `formatSpeedTime(scaleSpeedTime(raw))`, Final at two decimals; missing
+ *      speed / mark → empty string (Requirements 7.1–7.8). The ordered values
+ *      are mirrored onto E1..E6 and the named fields are returned in `extra`.
+ *   3. Standard: E1..E5 via `formatDecimals(mark, policy.judgeDecimals)` and E6
+ *      via `averageMarks(marks, policy.averaging)` (Requirements 5, 6).
+ *
+ * @param {Array} judges  the entry's `einkunnir_domara` array
+ * @param {object} source the raw entry (for the Sportfengur display total)
+ * @param {import('./class-type.js').ClassTypePolicy} policy
+ * @param {object} context normalization context
+ * @returns {{E1:string,E2:string,E3:string,E4:string,E5:string,E6:string,extra?:object}}
+ */
+function computeContextScores(judges, source, policy, context) {
+  // 1. B-úrslit real judge scores (Requirement 10).
+  if (context && context.competitionId === 3) {
+    const marks = allJudgeMarks(judges);
+    const e1 = formatDecimals(marks[0], 2);
+    const e2 = formatDecimals(marks[1], 2);
+    const e3 = formatDecimals(marks[2], 2);
+    const e4 = formatDecimals(marks[3], 2);
+    const e5 = formatDecimals(marks[4], 2);
+    const avg = averageMarks(marks, 'sum5');
+    const e6 = avg === null ? '' : formatDecimals(avg, policy.finalDecimals);
+    return { E1: e1, E2: e2, E3: e3, E4: e4, E5: e5, E6: e6 };
+  }
+
+  // 2. Gæðingaskeið ordered output (Requirement 7).
+  if (policy.layout === 'gaedingaskeid') {
+    const { marks, speed } = splitGaedingaskeid(judges);
+    const D1 = formatDecimals(marks[0], policy.judgeDecimals);
+    const D2 = formatDecimals(marks[1], policy.judgeDecimals);
+    const D3 = formatDecimals(marks[2], policy.judgeDecimals);
+    const TIME = formatSpeedTime(scaleSpeedTime(speed));
+    const D5 = formatDecimals(marks[3], policy.judgeDecimals);
+    const Final = formatDecimals(
+      getDisplayTotalScore(source),
+      policy.finalDecimals,
+    );
+    return {
+      E1: D1,
+      E2: D2,
+      E3: D3,
+      E4: TIME,
+      E5: D5,
+      E6: Final,
+      extra: { D1, D2, D3, TIME, D5, Final },
+    };
+  }
+
+  // 3. Standard context path (Requirements 5, 6).
+  const marks = rawJudgeMarks(judges);
+  const e1 = formatDecimals(marks[0], policy.judgeDecimals);
+  const e2 = formatDecimals(marks[1], policy.judgeDecimals);
+  const e3 = formatDecimals(marks[2], policy.judgeDecimals);
+  const e4 = formatDecimals(marks[3], policy.judgeDecimals);
+  const e5 = formatDecimals(marks[4], policy.judgeDecimals);
+  const avg = averageMarks(marks, policy.averaging);
+  const e6 = avg === null ? '' : formatDecimals(avg, policy.finalDecimals);
+  return { E1: e1, E2: e2, E3: e3, E4: e4, E5: e5, E6: e6 };
+}
+
+/**
+ * Resolve the finishing/start-position color name for the context path.
+ *
+ * Palette precedence (Requirement 11): when `multipleOnCourse` or
+ * `isSpecialPreliminary` is set the 3-color preliminary palette
+ * `[red, yellow, green]` is used, overriding the class-type palette; otherwise
+ * the policy's palette applies. The position is derived from the Ras_Color
+ * value and mapped via the total `positionColorName` (empty for out-of-range /
+ * invalid positions).
+ *
+ * @param {*} liturRas Ras_Color value (e.g. "1 - Rauður")
+ * @param {import('./class-type.js').ClassTypePolicy} policy
+ * @param {object} context normalization context
+ * @returns {string} the color name, or '' when out of range / invalid
+ */
+function resolveRasLitur(liturRas, policy, context) {
+  const palette =
+    context && (context.multipleOnCourse || context.isSpecialPreliminary)
+      ? PRELIMINARY_PALETTE
+      : policy.colorPalette;
+  return positionColorName(positionFromRasColor(liturRas), palette);
 }
 
 function averageForDisplay(scores) {
@@ -195,7 +450,7 @@ function extractGaitScores(judges) {
   return gaitScores;
 }
 
-export function normalizeCurrent(apiResponse) {
+export function normalizeCurrent(apiResponse, context = {}) {
   if (!apiResponse || typeof apiResponse !== 'object') {
     return {
       Nr: '',
@@ -242,18 +497,58 @@ export function normalizeCurrent(apiResponse) {
       '',
   );
 
+  // Class_Type-driven field mapping (Requirements 2, 3, 4). The default /
+  // no-context path resolves to the Sport_Tolt (rider-primary) policy, so
+  // Knapi/Hestur are identical to the pre-Landsmót behavior. `Lid` keeps its
+  // legacy team-name source unless an explicit Class_Type is supplied, so the
+  // default path stays byte-for-byte identical (Requirement 1.7).
+  const policy = getClassTypePolicy(context.classType);
+  const mapping = applyFieldMapping(
+    {
+      riderName,
+      horseName,
+      riderClub: resolveRiderClub(apiResponse),
+      horseClub: resolveHorseClub(apiResponse),
+    },
+    policy,
+  );
+  const hasClassContext = context != null && context.classType != null;
+  const lid = hasClassContext ? mapping.Lid : resolveLegacyLid(apiResponse);
+
   const judges = Array.isArray(apiResponse.einkunnir_domara)
     ? apiResponse.einkunnir_domara
     : [];
-  const judgeScores = judgeMarksOnly(judges);
 
   const gaitScores = extractGaitScores(judges);
-  const e1 = judgeScores[0] || '';
-  const e2 = judgeScores[1] || '';
-  const e3 = judgeScores[2] || '';
-  const e4 = judgeScores[3] || '';
-  const e5 = judgeScores[4] || '';
-  const e6 = roundScore(getDisplayTotalScore(apiResponse), true);
+
+  // Judge marks + Final_Score. The default / no-context path keeps the exact
+  // pre-Landsmót formatting (roundScore: judges up to 2 decimals, Final at 2
+  // decimals sourced from Sportfengur's display total). When an explicit
+  // Class_Type context is supplied, format E1..E5 with `policy.judgeDecimals`
+  // and compute the Final_Score via `averageMarks(marks, policy.averaging)`
+  // formatted at `policy.finalDecimals` — emitting empty when preconditions are
+  // unmet (fewer than five numeric marks, or averaging === null)
+  // (Requirements 5.1–5.5, 6.1–6.4, 9.5, 9.6).
+  let e1, e2, e3, e4, e5, e6;
+  let gaedingaFields = null;
+  if (hasClassContext) {
+    const scores = computeContextScores(judges, apiResponse, policy, context);
+    e1 = scores.E1;
+    e2 = scores.E2;
+    e3 = scores.E3;
+    e4 = scores.E4;
+    e5 = scores.E5;
+    e6 = scores.E6;
+    gaedingaFields = scores.extra || null;
+  } else {
+    const judgeScores = judgeMarksOnly(judges);
+    e1 = judgeScores[0] || '';
+    e2 = judgeScores[1] || '';
+    e3 = judgeScores[2] || '';
+    e4 = judgeScores[3] || '';
+    e5 = judgeScores[4] || '';
+    e6 = roundScore(getDisplayTotalScore(apiResponse), true);
+  }
 
   const liturRas =
     apiResponse.rodun_litur_numer != null && apiResponse.rodun_litur
@@ -265,17 +560,18 @@ export function normalizeCurrent(apiResponse) {
     Saeti: String(apiResponse.saeti || apiResponse.fmt_saeti || ''),
     Holl: String(apiResponse.holl || ''),
     Hond: String(apiResponse.hond || ''),
-    Knapi: riderName,
+    Knapi: mapping.Knapi,
     LiturRas: liturRas,
     colorHex: getColorHex(liturRas),
+    ...(hasClassContext
+      ? { RasLitur: resolveRasLitur(liturRas, policy, context) }
+      : {}),
     FelagKnapa: String(apiResponse.adildarfelag_knapa || ''),
-    Hestur: horseName,
+    Hestur: mapping.Hestur,
     Litur: String(apiResponse.hross_litur || ''),
     Aldur: String(calculateAldur(apiResponse.faedingarnumer)),
     FelagEiganda: String(apiResponse.adildarfelag_eiganda || ''),
-    Lid: String(
-      apiResponse.lid || apiResponse.Lid || apiResponse.team_name || '',
-    ),
+    Lid: lid,
     NafnBIG: riderName ? riderName.toUpperCase() : '',
     E1: e1,
     E2: e2,
@@ -283,6 +579,7 @@ export function normalizeCurrent(apiResponse) {
     E4: e4,
     E5: e5,
     E6: e6,
+    ...(gaedingaFields || {}),
     ...gaitScores,
     adal: {
       E1: e1,
@@ -296,10 +593,13 @@ export function normalizeCurrent(apiResponse) {
   };
 }
 
-export function normalizeLeaderboard(apiResponse) {
+export function normalizeLeaderboard(apiResponse, context = {}) {
   if (!Array.isArray(apiResponse)) {
     return [];
   }
+
+  const policy = getClassTypePolicy(context.classType);
+  const hasClassContext = context != null && context.classType != null;
 
   return apiResponse
     .filter((entry) => entry != null)
@@ -317,18 +617,53 @@ export function normalizeLeaderboard(apiResponse) {
           '',
       );
 
+      // Class_Type-driven field mapping (Requirements 2, 3, 4). Default /
+      // no-context resolves to the rider-primary policy so Knapi/Hestur match
+      // the pre-Landsmót behavior; `Lid` keeps its legacy team-name source
+      // unless an explicit Class_Type is supplied (Requirement 1.7).
+      const mapping = applyFieldMapping(
+        {
+          riderName,
+          horseName,
+          riderClub: resolveRiderClub(entry),
+          horseClub: resolveHorseClub(entry),
+        },
+        policy,
+      );
+      const lid = hasClassContext ? mapping.Lid : resolveLegacyLid(entry);
+
       const judges = Array.isArray(entry.einkunnir_domara)
         ? entry.einkunnir_domara
         : [];
-      const judgeScores = judgeMarksOnly(judges);
 
       const gaitScores = extractGaitScores(judges);
-      const e1 = judgeScores[0] || '';
-      const e2 = judgeScores[1] || '';
-      const e3 = judgeScores[2] || '';
-      const e4 = judgeScores[3] || '';
-      const e5 = judgeScores[4] || '';
-      const e6 = roundScore(getDisplayTotalScore(entry), true);
+
+      // Judge marks + Final_Score. Default / no-context path keeps the exact
+      // pre-Landsmót formatting; an explicit Class_Type context formats E1..E5
+      // with `policy.judgeDecimals` and computes the Final_Score via
+      // `averageMarks(marks, policy.averaging)` at `policy.finalDecimals`,
+      // emitting empty when preconditions are unmet (Requirements 5.1–5.5,
+      // 6.1–6.4, 9.5, 9.6).
+      let e1, e2, e3, e4, e5, e6;
+      let gaedingaFields = null;
+      if (hasClassContext) {
+        const scores = computeContextScores(judges, entry, policy, context);
+        e1 = scores.E1;
+        e2 = scores.E2;
+        e3 = scores.E3;
+        e4 = scores.E4;
+        e5 = scores.E5;
+        e6 = scores.E6;
+        gaedingaFields = scores.extra || null;
+      } else {
+        const judgeScores = judgeMarksOnly(judges);
+        e1 = judgeScores[0] || '';
+        e2 = judgeScores[1] || '';
+        e3 = judgeScores[2] || '';
+        e4 = judgeScores[3] || '';
+        e5 = judgeScores[4] || '';
+        e6 = roundScore(getDisplayTotalScore(entry), true);
+      }
 
       const liturRas =
         entry.rodun_litur_numer != null && entry.rodun_litur
@@ -340,15 +675,18 @@ export function normalizeLeaderboard(apiResponse) {
         Saeti: String(entry.saeti || entry.fmt_saeti || ''),
         Holl: String(entry.holl || ''),
         Hond: String(entry.hond || ''),
-        Knapi: riderName,
+        Knapi: mapping.Knapi,
         LiturRas: liturRas,
         colorHex: getColorHex(liturRas),
+        ...(hasClassContext
+          ? { RasLitur: resolveRasLitur(liturRas, policy, context) }
+          : {}),
         FelagKnapa: String(entry.adildarfelag_knapa || ''),
-        Hestur: horseName,
+        Hestur: mapping.Hestur,
         Litur: String(entry.hross_litur || ''),
         Aldur: String(calculateAldur(entry.faedingarnumer)),
         FelagEiganda: String(entry.adildarfelag_eiganda || ''),
-        Lid: String(entry.lid || entry.Lid || entry.team_name || ''),
+        Lid: lid,
         NafnBIG: riderName ? riderName.toUpperCase() : '',
         E1: e1,
         E2: e2,
@@ -356,6 +694,7 @@ export function normalizeLeaderboard(apiResponse) {
         E4: e4,
         E5: e5,
         E6: e6,
+        ...(gaedingaFields || {}),
         ...gaitScores,
         adal: {
           E1: e1,
