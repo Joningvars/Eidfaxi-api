@@ -202,6 +202,13 @@ const migrations = [
         WHERE source_event_id IS NULL;
     `,
   },
+  {
+    name: '009_add_slot_class_types',
+    sql: `
+      ALTER TABLE vmix_event_slots
+        ADD COLUMN IF NOT EXISTS class_types JSONB NOT NULL DEFAULT '{}'::jsonb;
+    `,
+  },
 ];
 
 export async function runMigrations() {

@@ -1,6 +1,6 @@
 import { fetchLeaderboard } from './vendor.js';
 import { normalizeLeaderboard } from './normalizer.js';
-import { updateState, updateEventState } from './state.js';
+import { updateState, updateEventState, getEventClassType } from './state.js';
 import { persistEventSlot } from './event-registry.js';
 import { log } from '../logger.js';
 
@@ -165,7 +165,13 @@ export async function refreshCompetitionNow(
     );
 
     const leaderboardData = await Promise.race([fetchPromise, timeoutPromise]);
-    const normalizedLeaderboard = normalizeLeaderboard(leaderboardData);
+    const classType = getEventClassType(eventId, competitionId);
+    const normalizedLeaderboard = normalizeLeaderboard(leaderboardData, {
+      classType,
+      competitionId,
+      multipleOnCourse: false,
+      isSpecialPreliminary: false,
+    });
     log.vmix.normalized(normalizedLeaderboard.length);
 
     // Update per-event state (keyed by the slot key, not the source event)
@@ -367,7 +373,13 @@ async function refreshWithTimeout() {
     competitionId,
     forceRefresh,
   );
-  const normalizedLeaderboard = normalizeLeaderboard(leaderboardData);
+  const classType = getEventClassType(eventId, competitionId);
+  const normalizedLeaderboard = normalizeLeaderboard(leaderboardData, {
+    classType,
+    competitionId,
+    multipleOnCourse: false,
+    isSpecialPreliminary: false,
+  });
   log.vmix.normalized(normalizedLeaderboard.length);
   updateState(normalizedLeaderboard, eventId, classId, competitionId);
   return normalizedLeaderboard;

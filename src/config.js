@@ -71,3 +71,10 @@ export const DATABASE_POOL_MAX = Number(process.env.DATABASE_POOL_MAX || 10);
 export const ROSTER_CACHE_TTL_MS = Number(
   process.env.ROSTER_CACHE_TTL_MS || 60000,
 );
+
+// Worldfengur (breeding-show enrichment) — optional; degrades to empty when
+// unconfigured. The API client itself is provided separately and injected into
+// src/worldfengur.js; these values only gate whether the provider is active.
+export const WORLDFENGUR_BASE_URL = process.env.WORLDFENGUR_BASE_URL || '';
+export const WORLDFENGUR_USERNAME = process.env.WORLDFENGUR_USERNAME || '';
+export const WORLDFENGUR_PASSWORD = process.env.WORLDFENGUR_PASSWORD || '';

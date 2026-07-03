@@ -1,13 +1,14 @@
 import { getDefaultEventId } from './event-registry.js';
+import { DEFAULT_CLASS_TYPE } from './class-type.js';
 
 /**
  * Per-event state store using Map<eventId, EventState>
  *
  * EventState = {
  *   competitions: {
- *     1: { leaderboard: [], classId: null },
- *     2: { leaderboard: [], classId: null },
- *     3: { leaderboard: [], classId: null },
+ *     1: { leaderboard: [], classId: null, classType: DEFAULT_CLASS_TYPE },
+ *     2: { leaderboard: [], classId: null, classType: DEFAULT_CLASS_TYPE },
+ *     3: { leaderboard: [], classId: null, classType: DEFAULT_CLASS_TYPE },
  *   }
  * }
  */
@@ -24,9 +25,9 @@ let currentClassId = null;
 function createEmptyEventState() {
   return {
     competitions: {
-      1: { leaderboard: [], classId: null },
-      2: { leaderboard: [], classId: null },
-      3: { leaderboard: [], classId: null },
+      1: { leaderboard: [], classId: null, classType: DEFAULT_CLASS_TYPE },
+      2: { leaderboard: [], classId: null, classType: DEFAULT_CLASS_TYPE },
+      3: { leaderboard: [], classId: null, classType: DEFAULT_CLASS_TYPE },
     },
   };
 }
@@ -100,7 +101,13 @@ export function updateEventState(eventId, competitionId, leaderboard, classId) {
 
   const state = eventStates.get(id);
   if (state.competitions[competitionId]) {
-    state.competitions[competitionId] = { leaderboard, classId };
+    const existingClassType =
+      state.competitions[competitionId].classType ?? DEFAULT_CLASS_TYPE;
+    state.competitions[competitionId] = {
+      leaderboard,
+      classId,
+      classType: existingClassType,
+    };
   }
 }
 
@@ -136,6 +143,64 @@ export function getEventCompetitionClassIds(eventId) {
     1: state.competitions[1]?.classId ?? null,
     2: state.competitions[2]?.classId ?? null,
     3: state.competitions[3]?.classId ?? null,
+  };
+}
+
+/**
+ * Set the Class_Type for a specific competition slot without overwriting
+ * leaderboard data or classId.
+ *
+ * @param {number} eventId
+ * @param {number} competitionId - 1, 2, or 3
+ * @param {string} classType - One of ClassType.* values
+ */
+export function setEventClassType(eventId, competitionId, classType) {
+  const id = Number(eventId);
+  if (!eventStates.has(id)) {
+    eventStates.set(id, createEmptyEventState());
+  }
+  const state = eventStates.get(id);
+  if (state.competitions[competitionId]) {
+    state.competitions[competitionId].classType = classType;
+  }
+}
+
+/**
+ * Get the stored Class_Type for a specific competition slot.
+ * Returns DEFAULT_CLASS_TYPE when unset or when the event/slot is unknown.
+ *
+ * @param {number} eventId
+ * @param {number} competitionId - 1, 2, or 3
+ * @returns {string} The stored Class_Type or DEFAULT_CLASS_TYPE
+ */
+export function getEventClassType(eventId, competitionId) {
+  const state = eventStates.get(Number(eventId));
+  if (!state || !state.competitions[competitionId]) {
+    return DEFAULT_CLASS_TYPE;
+  }
+  return state.competitions[competitionId].classType ?? DEFAULT_CLASS_TYPE;
+}
+
+/**
+ * Get the competition Class_Types for a given event as a plain object.
+ * Returns { 1, 2, 3 } with each slot defaulting to DEFAULT_CLASS_TYPE when unset.
+ *
+ * @param {number} eventId
+ * @returns {Object}
+ */
+export function getEventCompetitionClassTypes(eventId) {
+  const state = eventStates.get(Number(eventId));
+  if (!state) {
+    return {
+      1: DEFAULT_CLASS_TYPE,
+      2: DEFAULT_CLASS_TYPE,
+      3: DEFAULT_CLASS_TYPE,
+    };
+  }
+  return {
+    1: state.competitions[1]?.classType ?? DEFAULT_CLASS_TYPE,
+    2: state.competitions[2]?.classType ?? DEFAULT_CLASS_TYPE,
+    3: state.competitions[3]?.classType ?? DEFAULT_CLASS_TYPE,
   };
 }
 

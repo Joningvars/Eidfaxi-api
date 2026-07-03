@@ -20,14 +20,15 @@ export async function saveSlot(slot) {
   if (!isDbConfigured()) return;
   try {
     await queryDb(
-      `INSERT INTO vmix_event_slots (event_id, slot_order, label, name, allowed_class_id, class_ids, login_username, login_password, source_event_id, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+      `INSERT INTO vmix_event_slots (event_id, slot_order, label, name, allowed_class_id, class_ids, class_types, login_username, login_password, source_event_id, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
        ON CONFLICT (event_id) DO UPDATE SET
          slot_order = EXCLUDED.slot_order,
          label = EXCLUDED.label,
          name = EXCLUDED.name,
          allowed_class_id = EXCLUDED.allowed_class_id,
          class_ids = EXCLUDED.class_ids,
+         class_types = EXCLUDED.class_types,
          login_username = EXCLUDED.login_username,
          login_password = EXCLUDED.login_password,
          source_event_id = EXCLUDED.source_event_id,
@@ -39,6 +40,7 @@ export async function saveSlot(slot) {
         slot.name || '',
         slot.allowedClassId ?? null,
         JSON.stringify(slot.classIds ?? {}),
+        JSON.stringify(slot.classTypes ?? {}),
         slot.loginUsername ?? null,
         slot.loginPassword ?? null,
         slot.sourceEventId ?? slot.eventId,
@@ -78,8 +80,8 @@ export async function saveAllSlots(slots) {
     await queryDb('DELETE FROM vmix_event_slots');
     for (const slot of slots) {
       await queryDb(
-        `INSERT INTO vmix_event_slots (event_id, slot_order, label, name, allowed_class_id, class_ids, login_username, login_password, source_event_id, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
+        `INSERT INTO vmix_event_slots (event_id, slot_order, label, name, allowed_class_id, class_ids, class_types, login_username, login_password, source_event_id, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
         [
           slot.eventId,
           slot.slotOrder,
@@ -87,6 +89,7 @@ export async function saveAllSlots(slots) {
           slot.name || '',
           slot.allowedClassId ?? null,
           JSON.stringify(slot.classIds ?? {}),
+          JSON.stringify(slot.classTypes ?? {}),
           slot.loginUsername ?? null,
           slot.loginPassword ?? null,
           slot.sourceEventId ?? slot.eventId,
@@ -113,7 +116,7 @@ export async function loadSlots() {
   if (!isDbConfigured()) return [];
   try {
     const result = await queryDb(
-      `SELECT event_id, slot_order, label, name, allowed_class_id, class_ids, login_username, login_password, source_event_id
+      `SELECT event_id, slot_order, label, name, allowed_class_id, class_ids, class_types, login_username, login_password, source_event_id
        FROM vmix_event_slots
        ORDER BY slot_order ASC`,
     );
@@ -129,6 +132,19 @@ export async function loadSlots() {
           classIds = {};
         }
       }
+      // class_types may be absent on records that predate the column; default
+      // to an empty map so hydration falls back to DEFAULT_CLASS_TYPE per slot.
+      let classTypes = {};
+      if (row.class_types) {
+        try {
+          classTypes =
+            typeof row.class_types === 'string'
+              ? JSON.parse(row.class_types)
+              : row.class_types;
+        } catch {
+          classTypes = {};
+        }
+      }
       return {
         eventId: Number(row.event_id),
         slotOrder: Number(row.slot_order),
@@ -137,6 +153,7 @@ export async function loadSlots() {
         allowedClassId:
           row.allowed_class_id == null ? null : Number(row.allowed_class_id),
         classIds,
+        classTypes,
         loginUsername: row.login_username || null,
         loginPassword: row.login_password || null,
         sourceEventId:
