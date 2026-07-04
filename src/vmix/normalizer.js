@@ -1,8 +1,6 @@
 import {
   getClassTypePolicy,
   applyFieldMapping,
-  formatDecimals,
-  averageMarks,
   formatSpeedTime,
   scaleSpeedTime,
   positionColorName,
@@ -121,67 +119,6 @@ function judgeMarksOnly(judges) {
 }
 
 /**
- * Collect the raw (unformatted) real judge marks for the policy-driven path.
- *
- * Mirrors `judgeMarksOnly`'s speed/time filtering (values > 10 are a
- * skeið/gæðingaskeið time, not a judge mark) but returns the *raw* values so
- * the caller can format them with `formatDecimals(value, policy.judgeDecimals)`
- * and average them with `averageMarks(marks, policy.averaging)` at full
- * precision (avoids double-rounding through `roundScore`). Non-numeric / blank
- * entries are passed through unchanged; `formatDecimals`/`averageMarks` treat
- * them as unavailable.
- *
- * @param {Array<{domari_adaleinkunn?: any}>} judges
- * @returns {any[]} the raw real judge marks (max 5)
- */
-function rawJudgeMarks(judges) {
-  const marks = [];
-  for (const judge of Array.isArray(judges) ? judges : []) {
-    const raw = judge?.domari_adaleinkunn;
-    const num = Number(
-      String(raw ?? '')
-        .trim()
-        .replace(',', '.'),
-    );
-    // Skip speed/time values (> 10) — they are not judge marks.
-    if (Number.isFinite(num) && num > 10) continue;
-    marks.push(raw);
-  }
-  return marks.slice(0, 5);
-}
-
-/**
- * Split a gæðingaskeið judge array into the four real Judge_Marks and the
- * single Speed_Time. The Speed_Time is recorded in one of the judge slots as a
- * value greater than 10; the remaining slots hold the real 0–10 marks. Returns
- * the *raw* values so the caller can format marks with `formatDecimals` and the
- * time via `formatSpeedTime(scaleSpeedTime(...))` (Requirements 7.1–7.3).
- *
- * @param {Array<{domari_adaleinkunn?: any}>} judges
- * @returns {{ marks: any[], speed: any }} up to four raw marks + the raw speed
- *   (`null` when no speed value is present)
- */
-function splitGaedingaskeid(judges) {
-  const marks = [];
-  let speed = null;
-  for (const judge of Array.isArray(judges) ? judges : []) {
-    const raw = judge?.domari_adaleinkunn;
-    const num = Number(
-      String(raw ?? '')
-        .trim()
-        .replace(',', '.'),
-    );
-    if (Number.isFinite(num) && num > 10) {
-      // First speed value (> 10) fills the TIME slot; ignore any extras.
-      if (speed === null) speed = raw;
-      continue;
-    }
-    marks.push(raw);
-  }
-  return { marks: marks.slice(0, 4), speed };
-}
-
-/**
  * Return the first judge value that parses to a finite number > 10 — the
  * skeið / gæðingaskeið speed/time recorded in a judge slot — as its RAW value
  * (so the caller can format it via `formatSpeedTime(scaleSpeedTime(...))`).
@@ -202,23 +139,6 @@ function findSpeedTime(judges) {
     if (Number.isFinite(num) && num > 10) return raw;
   }
   return null;
-}
-
-/**
- * Collect judges 1..5 verbatim (no speed filtering, no reordering) for the
- * B-úrslit real-score path. Returns the raw values so the caller can format
- * each present value at two decimals and emit an empty string for
- * missing/blank/non-numeric slots (Requirements 10.1, 10.2).
- *
- * @param {Array<{domari_adaleinkunn?: any}>} judges
- * @returns {any[]} up to five raw judge values in slot order
- */
-function allJudgeMarks(judges) {
-  const marks = [];
-  for (const judge of Array.isArray(judges) ? judges : []) {
-    marks.push(judge?.domari_adaleinkunn);
-  }
-  return marks.slice(0, 5);
 }
 
 /**
@@ -273,65 +193,41 @@ function computeContextScores(judges, source, policy, context) {
   // named `TIME` field for templates that reference it.
   const timeRaw = findSpeedTime(judges);
   if (timeRaw !== null) {
-    const sprintMarks = rawJudgeMarks(judges);
+    // Real judge marks (≤ 10) pass straight through from Sportfengur; the time
+    // goes to E6. `judgeMarksOnly` applies the same roundScore pass-through the
+    // default path uses, so the marks match the Sportfengur app exactly.
+    const sprintMarks = judgeMarksOnly(judges);
     const TIME = formatSpeedTime(scaleSpeedTime(timeRaw));
     return {
-      E1: formatDecimals(sprintMarks[0], 1),
-      E2: formatDecimals(sprintMarks[1], 1),
-      E3: formatDecimals(sprintMarks[2], 1),
-      E4: formatDecimals(sprintMarks[3], 1),
-      E5: formatDecimals(sprintMarks[4], 1),
+      E1: sprintMarks[0] || '',
+      E2: sprintMarks[1] || '',
+      E3: sprintMarks[2] || '',
+      E4: sprintMarks[3] || '',
+      E5: sprintMarks[4] || '',
       E6: TIME,
       extra: { TIME },
     };
   }
 
-  // 1. B-úrslit real judge scores (Requirement 10).
-  if (context && context.competitionId === 3) {
-    const marks = allJudgeMarks(judges);
-    const e1 = formatDecimals(marks[0], 2);
-    const e2 = formatDecimals(marks[1], 2);
-    const e3 = formatDecimals(marks[2], 2);
-    const e4 = formatDecimals(marks[3], 2);
-    const e5 = formatDecimals(marks[4], 2);
-    const avg = averageMarks(marks, 'sum5');
-    const e6 = avg === null ? '' : formatDecimals(avg, policy.finalDecimals);
-    return { E1: e1, E2: e2, E3: e3, E4: e4, E5: e5, E6: e6 };
-  }
-
-  // 2. Gæðingaskeið ordered output (Requirement 7).
-  if (policy.layout === 'gaedingaskeid') {
-    const { marks, speed } = splitGaedingaskeid(judges);
-    const D1 = formatDecimals(marks[0], policy.judgeDecimals);
-    const D2 = formatDecimals(marks[1], policy.judgeDecimals);
-    const D3 = formatDecimals(marks[2], policy.judgeDecimals);
-    const TIME = formatSpeedTime(scaleSpeedTime(speed));
-    const D5 = formatDecimals(marks[3], policy.judgeDecimals);
-    const Final = formatDecimals(
-      getDisplayTotalScore(source),
-      policy.finalDecimals,
-    );
-    return {
-      E1: D1,
-      E2: D2,
-      E3: D3,
-      E4: TIME,
-      E5: D5,
-      E6: Final,
-      extra: { D1, D2, D3, TIME, D5, Final },
-    };
-  }
-
-  // 3. Standard context path (Requirements 5, 6).
-  const marks = rawJudgeMarks(judges);
-  const e1 = formatDecimals(marks[0], policy.judgeDecimals);
-  const e2 = formatDecimals(marks[1], policy.judgeDecimals);
-  const e3 = formatDecimals(marks[2], policy.judgeDecimals);
-  const e4 = formatDecimals(marks[3], policy.judgeDecimals);
-  const e5 = formatDecimals(marks[4], policy.judgeDecimals);
-  const avg = averageMarks(marks, policy.averaging);
-  const e6 = avg === null ? '' : formatDecimals(avg, policy.finalDecimals);
-  return { E1: e1, E2: e2, E3: e3, E4: e4, E5: e5, E6: e6 };
+  // Otherwise: ALWAYS mirror Sportfengur's own numbers — no re-rounding to a
+  // fixed decimal count and no recomputed average. Sportfengur already provides
+  // the per-judge marks at the correct precision (`domari_adaleinkunn`, e.g.
+  // 8.25) and the official total (`keppandi_medaleinkunn` /
+  // `keppandi_einkunn_5_ds`, e.g. 8.19 for a divisor-5 gæðingaflokkur). Passing
+  // them through guarantees the displayed values equal the Sportfengur app and
+  // is immune to class-type misclassification (a gæðingaflokkur whose name does
+  // not match "A flokkur" must NOT be re-rounded to 1 decimal or re-averaged).
+  // This mirrors the default (no-context) path; the Class_Type still drives
+  // field mapping, club sourcing, colors, and the sprint time rule above.
+  const marks = judgeMarksOnly(judges);
+  return {
+    E1: marks[0] || '',
+    E2: marks[1] || '',
+    E3: marks[2] || '',
+    E4: marks[3] || '',
+    E5: marks[4] || '',
+    E6: roundScore(getDisplayTotalScore(source), true),
+  };
 }
 
 /**
