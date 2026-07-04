@@ -182,6 +182,29 @@ function splitGaedingaskeid(judges) {
 }
 
 /**
+ * Return the first judge value that parses to a finite number > 10 — the
+ * skeið / gæðingaskeið speed/time recorded in a judge slot — as its RAW value
+ * (so the caller can format it via `formatSpeedTime(scaleSpeedTime(...))`).
+ * Returns `null` when no such value is present (not a sprint). Mirrors the
+ * comma-normalization parsing style used elsewhere in this file.
+ *
+ * @param {Array<{domari_adaleinkunn?: any}>} judges
+ * @returns {any} the first raw value > 10, or `null` when none present
+ */
+function findSpeedTime(judges) {
+  for (const judge of Array.isArray(judges) ? judges : []) {
+    const raw = judge?.domari_adaleinkunn;
+    const num = Number(
+      String(raw ?? '')
+        .trim()
+        .replace(',', '.'),
+    );
+    if (Number.isFinite(num) && num > 10) return raw;
+  }
+  return null;
+}
+
+/**
  * Collect judges 1..5 verbatim (no speed filtering, no reordering) for the
  * B-úrslit real-score path. Returns the raw values so the caller can format
  * each present value at two decimals and emit an empty string for
@@ -240,6 +263,29 @@ function positionFromRasColor(liturRas) {
  * @returns {{E1:string,E2:string,E3:string,E4:string,E5:string,E6:string,extra?:object}}
  */
 function computeContextScores(judges, source, policy, context) {
+  // 0. Sprint time rule (data-driven; takes precedence over BOTH the B-úrslit
+  // branch and the gæðingaskeið layout branch). The 100/150/250 m sprints
+  // record the time in a judge slot as a value > 10; because their
+  // keppni_numer is 4/5/6… they never carry Gaedingaskeid_Class and may land
+  // on the b-úrslit slot (competitionId 3). Regardless of slot/classType: when
+  // a time value is present, the real judge marks (≤ 10) fill E1..E5 (one
+  // decimal) and the time goes to E6 — NOT E4. The time is also exposed as a
+  // named `TIME` field for templates that reference it.
+  const timeRaw = findSpeedTime(judges);
+  if (timeRaw !== null) {
+    const sprintMarks = rawJudgeMarks(judges);
+    const TIME = formatSpeedTime(scaleSpeedTime(timeRaw));
+    return {
+      E1: formatDecimals(sprintMarks[0], 1),
+      E2: formatDecimals(sprintMarks[1], 1),
+      E3: formatDecimals(sprintMarks[2], 1),
+      E4: formatDecimals(sprintMarks[3], 1),
+      E5: formatDecimals(sprintMarks[4], 1),
+      E6: TIME,
+      extra: { TIME },
+    };
+  }
+
   // 1. B-úrslit real judge scores (Requirement 10).
   if (context && context.competitionId === 3) {
     const marks = allJudgeMarks(judges);
