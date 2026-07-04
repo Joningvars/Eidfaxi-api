@@ -84,6 +84,28 @@ function withUtf8Bom(text) {
   return `\uFEFF${text}`;
 }
 
+/**
+ * Build the vMix group row shape shared by the group endpoints (multi-event and
+ * legacy `/groups`, `/group`, `/groups/flat`). Exposes the rider's club
+ * (`felagKnapa` ← FelagKnapa) and the horse's club (`felagHests` ←
+ * FelagEiganda) alongside the existing fields; `Lid` is preserved as-is.
+ *
+ * @param {object} entry a normalized leaderboard entry
+ * @returns {{ name:string, horse:string, Lid:string, felagKnapa:string, felagHests:string, Nr:string, saeti:string, einkunn:string }}
+ */
+function toVmixGroupRow(entry) {
+  return {
+    name: entry.Knapi || '',
+    horse: entry.Hestur || '',
+    Lid: entry.Lid || '',
+    felagKnapa: entry.FelagKnapa || '',
+    felagHests: entry.FelagEiganda || '',
+    Nr: entry.Nr || '',
+    saeti: entry.Saeti || '',
+    einkunn: entry.E6 || '',
+  };
+}
+
 export function extractGangtegundResults(currentState, sort = 'start') {
   const rowsByGait = new Map();
   const excludeKeys = new Set([
@@ -1736,14 +1758,7 @@ export function registerVmixRoutes(app) {
         .status(400)
         .json({ error: 'Invalid groupSize value', supported: '1-50' });
     }
-    const vmixRows = sorted.map((entry) => ({
-      name: entry.Knapi || '',
-      horse: entry.Hestur || '',
-      Lid: entry.Lid || '',
-      Nr: entry.Nr || '',
-      saeti: entry.Saeti || '',
-      einkunn: entry.E6 || '',
-    }));
+    const vmixRows = sorted.map(toVmixGroupRow);
     const groups = chunkEntries(vmixRows, groupSize);
     log.server.endpoint(
       `/event/${eventId}/${competitionType}/groups?sort=${sort}&groupSize=${groupSize}`,
@@ -1774,14 +1789,7 @@ export function registerVmixRoutes(app) {
         .status(400)
         .json({ error: 'Invalid group value', supported: '>= 1' });
     }
-    const vmixRows = sorted.map((entry) => ({
-      name: entry.Knapi || '',
-      horse: entry.Hestur || '',
-      Lid: entry.Lid || '',
-      Nr: entry.Nr || '',
-      saeti: entry.Saeti || '',
-      einkunn: entry.E6 || '',
-    }));
+    const vmixRows = sorted.map(toVmixGroupRow);
     const selectedGroup = chunkEntries(vmixRows, groupSize)[group - 1] || [];
     log.server.endpoint(
       `/event/${eventId}/${competitionType}/group?sort=${sort}&groupSize=${groupSize}&group=${group}`,
@@ -1805,14 +1813,7 @@ export function registerVmixRoutes(app) {
         .status(400)
         .json({ error: 'Invalid groupSize value', supported: '1-50' });
     }
-    const vmixRows = sorted.map((entry) => ({
-      name: entry.Knapi || '',
-      horse: entry.Hestur || '',
-      Lid: entry.Lid || '',
-      Nr: entry.Nr || '',
-      saeti: entry.Saeti || '',
-      einkunn: entry.E6 || '',
-    }));
+    const vmixRows = sorted.map(toVmixGroupRow);
     const grouped = chunkEntries(vmixRows, groupSize);
     const flattened = grouped.map((groupRows, groupIndex) => {
       const row = { group: groupIndex + 1 };
@@ -1822,6 +1823,8 @@ export function registerVmixRoutes(app) {
         row[`name${n}`] = contestant?.name || '';
         row[`horse${n}`] = contestant?.horse || '';
         row[`Lid${n}`] = contestant?.Lid || '';
+        row[`felagKnapa${n}`] = contestant?.felagKnapa || '';
+        row[`felagHests${n}`] = contestant?.felagHests || '';
         row[`Nr${n}`] = contestant?.Nr || '';
         row[`saeti${n}`] = contestant?.saeti || '';
         row[`einkunn${n}`] = contestant?.einkunn || '';
@@ -2133,14 +2136,7 @@ export function registerVmixRoutes(app) {
         .status(400)
         .json({ error: 'Invalid groupSize value', supported: '1-50' });
     }
-    const vmixRows = sorted.map((entry) => ({
-      name: entry.Knapi || '',
-      horse: entry.Hestur || '',
-      Lid: entry.Lid || '',
-      Nr: entry.Nr || '',
-      saeti: entry.Saeti || '',
-      einkunn: entry.E6 || '',
-    }));
+    const vmixRows = sorted.map(toVmixGroupRow);
     const groups = chunkEntries(vmixRows, groupSize);
     log.server.endpoint(
       `/event/${competitionType}/groups?sort=${sort}&groupSize=${groupSize}`,
@@ -2171,14 +2167,7 @@ export function registerVmixRoutes(app) {
         .status(400)
         .json({ error: 'Invalid group value', supported: '>= 1' });
     }
-    const vmixRows = sorted.map((entry) => ({
-      name: entry.Knapi || '',
-      horse: entry.Hestur || '',
-      Lid: entry.Lid || '',
-      Nr: entry.Nr || '',
-      saeti: entry.Saeti || '',
-      einkunn: entry.E6 || '',
-    }));
+    const vmixRows = sorted.map(toVmixGroupRow);
     const selectedGroup = chunkEntries(vmixRows, groupSize)[group - 1] || [];
     log.server.endpoint(
       `/event/${competitionType}/group?sort=${sort}&groupSize=${groupSize}&group=${group}`,
@@ -2205,14 +2194,7 @@ export function registerVmixRoutes(app) {
           .status(400)
           .json({ error: 'Invalid groupSize value', supported: '1-50' });
       }
-      const vmixRows = sorted.map((entry) => ({
-        name: entry.Knapi || '',
-        horse: entry.Hestur || '',
-        Lid: entry.Lid || '',
-        Nr: entry.Nr || '',
-        saeti: entry.Saeti || '',
-        einkunn: entry.E6 || '',
-      }));
+      const vmixRows = sorted.map(toVmixGroupRow);
       const grouped = chunkEntries(vmixRows, groupSize);
       const flattened = grouped.map((groupRows, groupIndex) => {
         const row = { group: groupIndex + 1 };
@@ -2222,6 +2204,8 @@ export function registerVmixRoutes(app) {
           row[`name${n}`] = contestant?.name || '';
           row[`horse${n}`] = contestant?.horse || '';
           row[`Lid${n}`] = contestant?.Lid || '';
+          row[`felagKnapa${n}`] = contestant?.felagKnapa || '';
+          row[`felagHests${n}`] = contestant?.felagHests || '';
           row[`Nr${n}`] = contestant?.Nr || '';
           row[`saeti${n}`] = contestant?.saeti || '';
           row[`einkunn${n}`] = contestant?.einkunn || '';
