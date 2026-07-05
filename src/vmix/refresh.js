@@ -212,6 +212,7 @@ export function scheduleRefreshForEvent(
   competitionId,
   forceRefresh = false,
   sourceEventId = null,
+  sourceCompetitionId = null,
 ) {
   const key = slotKey(eventId, competitionId);
   const slot = getOrCreateSlot(key);
@@ -239,6 +240,7 @@ export function scheduleRefreshForEvent(
         competitionId,
         forceRefresh,
         sourceEventId,
+        sourceCompetitionId,
       );
       log.vmix.updated();
     } catch (error) {
