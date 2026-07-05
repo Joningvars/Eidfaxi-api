@@ -232,6 +232,21 @@ async function handleWebhook(req, res, eventName) {
       const sourceEventId = Number(payload.eventId);
       const incomingClassId = Number(payload.classId);
 
+      // Map the real Sportfengur competition number to the vMix display slot
+      // (1=forkeppni, 2=a-úrslit, 3=b-úrslit). Standard classes score under
+      // keppni_numer 1/2/3, which are the display slots directly. Multi-heat /
+      // Landsmót-numbered competitions (e.g. gæðingaskeið sprints 4/5/6, or a
+      // forkeppni carrying keppni_numer 10) score under a higher number that
+      // must be stored under the forkeppni slot (1) — mirroring the manual
+      // "Uppfæra forkeppni" path, which fetches the real number but stores it
+      // under slot 1. Without this mapping the data lands under a non-display
+      // slot (e.g. 10) that no vMix endpoint reads, so scores only appeared
+      // after a manual refresh.
+      const fetchCompetitionId = Number(resolvedCompetitionId);
+      const displaySlot = [1, 2, 3].includes(fetchCompetitionId)
+        ? fetchCompetitionId
+        : 1;
+
       // Fan out to every slot that broadcasts this source event. Each slot has
       // its own classId gate, so two cars on the same event can show different
       // classes — a slot only updates when the webhook's classId passes its gate.
@@ -248,9 +263,10 @@ async function handleWebhook(req, res, eventName) {
           scheduleRefreshForEvent(
             slotKeyId,
             incomingClassId,
-            Number(resolvedCompetitionId),
+            displaySlot,
             forceRefresh,
             sourceEventId,
+            fetchCompetitionId,
           );
           scheduledCount += 1;
         } catch (error) {
