@@ -640,6 +640,36 @@ export function resolveFetchCompetitionId(
     : requestedCompetitionId;
 }
 
+/**
+ * Find a named stage (e.g. milli-riðill) among the Sportfengur test rows for a
+ * class, by matching the `keppni` display name against a regex. Used by the
+ * manual "milli-ridill → forkeppni" refresh, where the stage has its own
+ * keppni_numer that is not one of the fixed vMix slots (1/2/3).
+ *
+ * When several rows match (e.g. "1. milliriðill", "2. milliriðill"), the first
+ * OPENED one by keppni_rod wins, falling back to the lowest-rod match when none
+ * are flagged open. Returns null when the class has no matching stage.
+ *
+ * @param {Array<{flokkar_numer:number, keppni_numer:number, keppni?:string, keppni_rod:number, keppni_opnud:number}>} tests
+ * @param {number} classId
+ * @param {RegExp} nameRegex matched against the keppni display name
+ * @returns {number|null} the Sportfengur competition number, or null
+ */
+export function resolveStageByName(tests, classId, nameRegex) {
+  const matches = (Array.isArray(tests) ? tests : []).filter(
+    (t) =>
+      Number(t.flokkar_numer) === Number(classId) &&
+      nameRegex.test(String(t.keppni || '')) &&
+      t.keppni_numer != null,
+  );
+  if (matches.length === 0) return null;
+
+  const byRod = (a, b) => Number(a.keppni_rod) - Number(b.keppni_rod);
+  const opened = matches.filter((t) => Number(t.keppni_opnud) === 1).sort(byRod);
+  const chosen = opened[0] ?? [...matches].sort(byRod)[0];
+  return Number(chosen.keppni_numer);
+}
+
 async function classBelongsToEventCompetition(eventId, classId, competitionId) {
   const data = await apiGetWithRetry(
     `/${SPORTFENGUR_LOCALE}/event/tests/${eventId}`,
@@ -1926,8 +1956,25 @@ export function registerVmixRoutes(app) {
       return res.status(403).json({ error: 'Forbidden: not your slot' });
     }
 
-    const scope = validateCompetitionType(req, res);
-    if (!scope) return;
+    // Special manual type: milli-ridill — fetch the class's milli-riðill stage
+    // (own keppni_numer on Sportfengur, discovered by name) and store it OVER
+    // the forkeppni slot (competitionId 1) so the fixed vMix graphics pick it
+    // up without any template changes.
+    const rawType = String(req.params.competitionType || '')
+      .trim()
+      .toLowerCase();
+    const isMilliRidill =
+      rawType === 'milli-ridill' ||
+      rawType === 'milliridill' ||
+      rawType === 'milli-riðill';
+
+    let scope;
+    if (isMilliRidill) {
+      scope = { competitionType: 'milli-ridill', competitionId: 1 };
+    } else {
+      scope = validateCompetitionType(req, res);
+      if (!scope) return;
+    }
     const { competitionType, competitionId } = scope;
 
     // Check if refresh already in progress
@@ -1968,16 +2015,37 @@ export function registerVmixRoutes(app) {
         `/${SPORTFENGUR_LOCALE}/event/tests/${sourceEv}`,
       );
       const tests = Array.isArray(testsData?.res) ? testsData.res : [];
-      const fetchCompetitionId = resolveFetchCompetitionId(
-        tests,
-        classId,
-        competitionId,
-      );
+
+      let fetchCompetitionId;
+      if (isMilliRidill) {
+        fetchCompetitionId = resolveStageByName(tests, classId, /milli/i);
+        if (fetchCompetitionId == null) {
+          return res.status(404).json({
+            error:
+              'No milli-riðill stage found for this class on Sportfengur (yet)',
+            classId,
+            stages: tests
+              .filter((t) => Number(t.flokkar_numer) === Number(classId))
+              .map((t) => ({
+                keppni: t.keppni,
+                keppni_numer: t.keppni_numer,
+                opnud: t.keppni_opnud,
+              })),
+          });
+        }
+      } else {
+        fetchCompetitionId = resolveFetchCompetitionId(
+          tests,
+          classId,
+          competitionId,
+        );
+      }
 
       // Fetch from Sportfengur using the resolved competition number, but
       // store under the display competition slot (1=forkeppni, 2=a-urslit, 3=b-urslit)
       // so the data appears at the expected vMix endpoint. For gæðingaskeið the
-      // Sportfengur competition number (e.g. 5) differs from the storage slot (1).
+      // Sportfengur competition number (e.g. 5) differs from the storage slot (1);
+      // for milli-ridill the milli-riðill stage is written over the forkeppni slot.
       await refreshCompetitionNow(
         eventId,
         classId,
