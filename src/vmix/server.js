@@ -74,6 +74,11 @@ const COLOR_HEX_BY_RAS_COLOR = {
   '4 - Blár': '#0000FF',
   '5 - Hvítur': '#FFFFFF',
   '6 - Svartur': '#000000',
+  // Positions 7–8 are used by the 8-color quality classes (gæðingaflokkar).
+  // Both accented and accent-less spellings are keyed defensively.
+  '7 - Bleikur': '#FF69B4',
+  '8 - Appelsínugulur': '#FFA500',
+  '8 - Appelsinugulur': '#FFA500',
 };
 
 function getColorHex(color) {
