@@ -162,6 +162,35 @@ function normalizeMeta(value) {
 }
 
 /**
+ * Detect a gæðingakeppni (quality) class from Sportfengur test-row metadata,
+ * checking BOTH fields — in real Sportfengur data the class name usually lives
+ * in `keppnisgrein` (disciplineText, e.g. "A flokkur") while `flokkur_nafn`
+ * (className) holds the division (e.g. "Gæðingaflokkur 1").
+ *
+ * Matches the exact adult/younger quality names, plus prefixed variants such as
+ * "Unglingaflokkur gæðinga" / "Barnaflokkur gæðinga". Pure, total,
+ * never-throwing. Used to pick the gait-averaging strategy (quality classes
+ * count all five judges; sport classes drop highest+lowest) WITHOUT changing
+ * the stored Class_Type (field mapping, palettes and seat counts are untouched).
+ *
+ * @param {{ className?: string, disciplineText?: string }} [meta]
+ * @returns {boolean}
+ */
+export function isQualityClassName(meta) {
+  const source = meta && typeof meta === 'object' ? meta : {};
+  const candidates = [
+    normalizeMeta(source.className),
+    normalizeMeta(source.disciplineText),
+  ];
+  const names = [...ADULT_QUALITY_NAMES, ...YOUNGER_QUALITY_NAMES];
+  return candidates.some(
+    (value) =>
+      value !== '' &&
+      names.some((name) => value === name || value.startsWith(`${name} `)),
+  );
+}
+
+/**
  * Classify a competition class into a Class_Type from its Sportfengur metadata.
  *
  * Pure, total, and never-throwing. Matching is case-insensitive and

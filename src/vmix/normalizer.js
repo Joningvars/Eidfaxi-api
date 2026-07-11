@@ -253,11 +253,16 @@ function resolveRasLitur(liturRas, policy, context) {
   return positionColorName(positionFromRasColor(liturRas), palette);
 }
 
-function averageForDisplay(scores) {
+function averageForDisplay(scores, averaging) {
   if (!Array.isArray(scores) || scores.length === 0) return null;
 
   const numeric = scores.filter((n) => Number.isFinite(n));
   if (numeric.length === 0) return null;
+
+  // Gæðingakeppni (quality classes): ALL judges count — plain mean, no trim.
+  if (averaging === 'sum5') {
+    return numeric.reduce((sum, n) => sum + n, 0) / numeric.length;
+  }
 
   // SportFengur judging convention for 5 judges: drop highest + lowest.
   if (numeric.length === 5) {
@@ -316,7 +321,13 @@ function getColorHex(liturRas) {
   return COLOR_HEX_BY_RAS_COLOR[String(liturRas || '').trim()] || '';
 }
 
-function extractGaitScores(judges) {
+/**
+ * @param {Array} judges the einkunnir_domara array
+ * @param {'sum5'|undefined} [averaging] gait-average strategy: 'sum5' counts
+ *   all judges (gæðingakeppni); default drops highest+lowest for 5 judges
+ *   (sport convention).
+ */
+function extractGaitScores(judges, averaging) {
   const gaitScores = {
     adal: {},
   };
@@ -340,7 +351,10 @@ function extractGaitScores(judges) {
 
   const adalScores = Object.values(gaitScores.adal).filter((s) => s !== '');
   if (adalScores.length > 0) {
-    const avg = averageForDisplay(adalScores.map((s) => Number(s)));
+    const avg = averageForDisplay(
+      adalScores.map((s) => Number(s)),
+      averaging,
+    );
     gaitScores.adal.E6 = avg == null ? '' : roundScore(avg, true);
   } else {
     gaitScores.adal.E6 = '';
@@ -386,7 +400,7 @@ function extractGaitScores(judges) {
     }
 
     if (scores.length > 0) {
-      const avg = averageForDisplay(scores);
+      const avg = averageForDisplay(scores, averaging);
       gaitScores[gaitKey].E6 = avg == null ? '' : roundScore(avg, true);
     } else {
       gaitScores[gaitKey].E6 = '';
@@ -466,7 +480,7 @@ export function normalizeCurrent(apiResponse, context = {}) {
     ? apiResponse.einkunnir_domara
     : [];
 
-  const gaitScores = extractGaitScores(judges);
+  const gaitScores = extractGaitScores(judges, context?.gaitAveraging);
 
   // Judge marks + Final_Score. The default / no-context path keeps the exact
   // pre-Landsmót formatting (roundScore: judges up to 2 decimals, Final at 2
@@ -583,7 +597,7 @@ export function normalizeLeaderboard(apiResponse, context = {}) {
         ? entry.einkunnir_domara
         : [];
 
-      const gaitScores = extractGaitScores(judges);
+      const gaitScores = extractGaitScores(judges, context?.gaitAveraging);
 
       // Judge marks + Final_Score. Default / no-context path keeps the exact
       // pre-Landsmót formatting; an explicit Class_Type context formats E1..E5

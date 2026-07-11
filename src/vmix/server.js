@@ -9,10 +9,12 @@ import {
   setEventClassId,
   setEventClassType,
   getEventClassType,
+  setEventGaitAveraging,
 } from './state.js';
 import { leaderboardToCsv } from './normalizer.js';
 import {
   classifyClassType,
+  isQualityClassName,
   getClassTypePolicy,
   finalsSeatCount,
 } from './class-type.js';
@@ -1475,6 +1477,21 @@ async function resolveClassIdsForEvent(slotKey, sourceEventId = null) {
         disciplineText: test?.keppnisgrein,
       });
       setEventClassType(slotKey, competitionId, classType);
+
+      // Gæðingakeppni (quality classes) count ALL judges in gait averages;
+      // sport classes drop highest+lowest. Detected from both metadata fields
+      // (the class name usually lives in keppnisgrein) and stored separately
+      // from classType so it does not affect field mapping / palettes / seats.
+      setEventGaitAveraging(
+        slotKey,
+        competitionId,
+        isQualityClassName({
+          className: test?.flokkur_nafn,
+          disciplineText: test?.keppnisgrein,
+        })
+          ? 'sum5'
+          : null,
+      );
     }
   }
   // Persist the resolved classIds so they survive a restart

@@ -9,12 +9,32 @@ import {
 } from './state.js';
 import { cancelRefreshesForEvent } from './refresh.js';
 import { saveAllSlots, saveSlot, loadSlots } from './slot-store.js';
+import { isDbConfigured } from '../db/client.js';
 import crypto from 'crypto';
 
 /**
  * Maximum number of active events allowed per instance.
  */
 export const MAX_ACTIVE_EVENTS = 10;
+
+/**
+ * True once the registry has been successfully hydrated from the database.
+ * While false (and a database is configured), all persistence is a no-op:
+ * a process that never read the store must never overwrite it. This protects
+ * the shared slot table from (a) boot-time races before hydration completes,
+ * (b) processes whose hydration failed, and (c) tests / one-off scripts that
+ * import the registry with a real DATABASE_URL in the environment — all of
+ * which previously replaced the production slots with their own snapshot.
+ */
+let storeHydrated = false;
+
+/**
+ * May this process write to the slot store? True when no DB is configured
+ * (writes are no-ops anyway) or after a successful hydrateFromStore().
+ */
+function canPersist() {
+  return !isDbConfigured() || storeHydrated;
+}
 
 /**
  * Internal registry: Map<eventId, { eventId, addedAt }>
@@ -59,6 +79,7 @@ function snapshotSlots() {
  * Persist the current registry state (fire-and-forget, best-effort).
  */
 function persist() {
+  if (!canPersist()) return;
   saveAllSlots(snapshotSlots()).catch(() => {
     // best-effort: persistence failures don't break the in-memory registry
   });
@@ -84,7 +105,10 @@ function nextSyntheticKey(sourceEventId) {
  * @returns {Promise<number>} The number of slots restored
  */
 export async function hydrateFromStore() {
-  const slots = await loadSlots();
+  const slots = await loadSlots(); // throws on DB error — flag stays false
+  // Reaching here means the store was READ successfully; an empty table is a
+  // legitimately empty store, so persistence is unlocked in both branches.
+  storeHydrated = true;
   if (slots.length === 0) return 0;
 
   activeEvents.clear();
@@ -455,6 +479,7 @@ export function setEventClassIdGate(eventId, classId) {
  * @param {number} eventId
  */
 export function persistEventSlot(eventId) {
+  if (!canPersist()) return;
   const parsed = Number(eventId);
   const entry = activeEvents.get(parsed);
   if (!entry) return;

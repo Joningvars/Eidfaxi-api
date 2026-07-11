@@ -182,6 +182,44 @@ export function getEventClassType(eventId, competitionId) {
 }
 
 /**
+ * Set the gait-averaging strategy for a specific competition slot.
+ * 'sum5' = gæðingakeppni quality class (all judges count in gait averages);
+ * null/undefined = sport convention (drop highest+lowest for 5 judges).
+ * Stored separately from classType so it can be corrected without touching
+ * field mapping / palettes / seat counts.
+ *
+ * @param {number} eventId
+ * @param {number} competitionId - 1, 2, or 3
+ * @param {'sum5'|null} averaging
+ */
+export function setEventGaitAveraging(eventId, competitionId, averaging) {
+  const id = Number(eventId);
+  if (!eventStates.has(id)) {
+    eventStates.set(id, createEmptyEventState());
+  }
+  const state = eventStates.get(id);
+  if (state.competitions[competitionId]) {
+    state.competitions[competitionId].gaitAveraging = averaging ?? null;
+  }
+}
+
+/**
+ * Get the stored gait-averaging strategy for a specific competition slot.
+ * Returns null (sport convention) when unset or unknown.
+ *
+ * @param {number} eventId
+ * @param {number} competitionId - 1, 2, or 3
+ * @returns {'sum5'|null}
+ */
+export function getEventGaitAveraging(eventId, competitionId) {
+  const state = eventStates.get(Number(eventId));
+  if (!state || !state.competitions[competitionId]) {
+    return null;
+  }
+  return state.competitions[competitionId].gaitAveraging ?? null;
+}
+
+/**
  * Get the competition Class_Types for a given event as a plain object.
  * Returns { 1, 2, 3 } with each slot defaulting to DEFAULT_CLASS_TYPE when unset.
  *

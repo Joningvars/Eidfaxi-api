@@ -1,4 +1,4 @@
-import { queryDb, isDbConfigured } from '../db/client.js';
+import { queryDb, isDbConfigured, withDbTransaction } from '../db/client.js';
 import { log } from '../logger.js';
 
 /**
@@ -76,33 +76,32 @@ export async function deleteSlot(eventId) {
 export async function saveAllSlots(slots) {
   if (!isDbConfigured()) return;
   try {
-    await queryDb('BEGIN');
-    await queryDb('DELETE FROM vmix_event_slots');
-    for (const slot of slots) {
-      await queryDb(
-        `INSERT INTO vmix_event_slots (event_id, slot_order, label, name, allowed_class_id, class_ids, class_types, login_username, login_password, source_event_id, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
-        [
-          slot.eventId,
-          slot.slotOrder,
-          slot.label || '',
-          slot.name || '',
-          slot.allowedClassId ?? null,
-          JSON.stringify(slot.classIds ?? {}),
-          JSON.stringify(slot.classTypes ?? {}),
-          slot.loginUsername ?? null,
-          slot.loginPassword ?? null,
-          slot.sourceEventId ?? slot.eventId,
-        ],
-      );
-    }
-    await queryDb('COMMIT');
+    // A real single-connection transaction is essential here: the DELETE and
+    // the INSERTs must commit (or vanish) together. Issued via pool.query the
+    // statements autocommit independently — a crash/deploy-SIGTERM after the
+    // DELETE wipes every slot without re-inserting them.
+    await withDbTransaction(async (client) => {
+      await client.query('DELETE FROM vmix_event_slots');
+      for (const slot of slots) {
+        await client.query(
+          `INSERT INTO vmix_event_slots (event_id, slot_order, label, name, allowed_class_id, class_ids, class_types, login_username, login_password, source_event_id, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
+          [
+            slot.eventId,
+            slot.slotOrder,
+            slot.label || '',
+            slot.name || '',
+            slot.allowedClassId ?? null,
+            JSON.stringify(slot.classIds ?? {}),
+            JSON.stringify(slot.classTypes ?? {}),
+            slot.loginUsername ?? null,
+            slot.loginPassword ?? null,
+            slot.sourceEventId ?? slot.eventId,
+          ],
+        );
+      }
+    });
   } catch (error) {
-    try {
-      await queryDb('ROLLBACK');
-    } catch {
-      // ignore rollback errors
-    }
     log.error('slot-store saveAllSlots', error);
   }
 }
@@ -163,7 +162,11 @@ export async function loadSlots() {
       };
     });
   } catch (error) {
+    // Rethrow instead of returning []: a DB failure must NOT look like a
+    // legitimately empty store. Treating it as empty made the registry start
+    // blank after a transient boot-time error, and the next persist() then
+    // overwrote the real slots with an empty snapshot.
     log.error('slot-store loadSlots', error);
-    return [];
+    throw error;
   }
 }
