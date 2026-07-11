@@ -37,6 +37,39 @@ export async function queryDb(text, params = []) {
   return pool.query(text, params);
 }
 
+/**
+ * Run `fn(client)` inside a real BEGIN/COMMIT transaction on a SINGLE
+ * dedicated connection. `pool.query` sends each statement on an arbitrary
+ * pooled connection, so BEGIN/…/COMMIT issued through `queryDb` do NOT form a
+ * transaction — the statements autocommit independently and a mid-sequence
+ * crash (e.g. a deploy SIGTERM) can persist a destructive statement (DELETE)
+ * without the statements that were meant to follow it. Rolls back and
+ * rethrows on error; always releases the client.
+ *
+ * @template T
+ * @param {(client: import('pg').PoolClient) => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+export async function withDbTransaction(fn) {
+  const pool = await getDbPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // connection may already be gone; the pool will discard it
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export function isDbConfigured() {
   return Boolean(DATABASE_URL);
 }
