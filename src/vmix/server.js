@@ -9,7 +9,7 @@ import {
   setEventClassId,
   setEventClassType,
   getEventClassType,
-  setEventGaitAveraging,
+  setClassGaitAveraging,
 } from './state.js';
 import { leaderboardToCsv } from './normalizer.js';
 import {
@@ -1459,6 +1459,28 @@ async function resolveClassIdsForEvent(slotKey, sourceEventId = null) {
   for (const test of tests) {
     const competitionId = Number.parseInt(String(test?.keppni_numer), 10);
     const classId = Number.parseInt(String(test?.flokkar_numer), 10);
+
+    // Gæðingakeppni (quality classes) count ALL judges in gait averages;
+    // sport classes drop highest+lowest. Recorded PER CLASS (flokkar_numer is
+    // globally unique) for EVERY test row — including milliriðill / sérstök
+    // forkeppni rows (keppni_numer 10, 11, ...) — because a multi-discipline
+    // event carries many classes per slot and the class being refreshed is
+    // what decides the averaging, not the slot. Detected from both metadata
+    // fields (the class name usually lives in keppnisgrein) and stored
+    // separately from classType so it does not affect field mapping /
+    // palettes / seats.
+    if (Number.isInteger(classId) && classId > 0) {
+      setClassGaitAveraging(
+        classId,
+        isQualityClassName({
+          className: test?.flokkur_nafn,
+          disciplineText: test?.keppnisgrein,
+        })
+          ? 'sum5'
+          : null,
+      );
+    }
+
     if (
       Number.isInteger(competitionId) &&
       competitionId >= 1 &&
@@ -1477,21 +1499,6 @@ async function resolveClassIdsForEvent(slotKey, sourceEventId = null) {
         disciplineText: test?.keppnisgrein,
       });
       setEventClassType(slotKey, competitionId, classType);
-
-      // Gæðingakeppni (quality classes) count ALL judges in gait averages;
-      // sport classes drop highest+lowest. Detected from both metadata fields
-      // (the class name usually lives in keppnisgrein) and stored separately
-      // from classType so it does not affect field mapping / palettes / seats.
-      setEventGaitAveraging(
-        slotKey,
-        competitionId,
-        isQualityClassName({
-          className: test?.flokkur_nafn,
-          disciplineText: test?.keppnisgrein,
-        })
-          ? 'sum5'
-          : null,
-      );
     }
   }
   // Persist the resolved classIds so they survive a restart
