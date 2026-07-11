@@ -4,7 +4,7 @@ import {
   updateState,
   updateEventState,
   getEventClassType,
-  getEventGaitAveraging,
+  getClassGaitAveraging,
 } from './state.js';
 import { persistEventSlot } from './event-registry.js';
 import { log } from '../logger.js';
@@ -174,7 +174,7 @@ export async function refreshCompetitionNow(
     const normalizedLeaderboard = normalizeLeaderboard(leaderboardData, {
       classType,
       competitionId,
-      gaitAveraging: getEventGaitAveraging(eventId, competitionId),
+      gaitAveraging: getClassGaitAveraging(classId),
       multipleOnCourse: false,
       isSpecialPreliminary: false,
     });
@@ -385,7 +385,7 @@ async function refreshWithTimeout() {
   const normalizedLeaderboard = normalizeLeaderboard(leaderboardData, {
     classType,
     competitionId,
-    gaitAveraging: getEventGaitAveraging(eventId, competitionId),
+    gaitAveraging: getClassGaitAveraging(classId),
     multipleOnCourse: false,
     isSpecialPreliminary: false,
   });

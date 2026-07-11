@@ -182,41 +182,40 @@ export function getEventClassType(eventId, competitionId) {
 }
 
 /**
- * Set the gait-averaging strategy for a specific competition slot.
- * 'sum5' = gæðingakeppni quality class (all judges count in gait averages);
- * null/undefined = sport convention (drop highest+lowest for 5 judges).
- * Stored separately from classType so it can be corrected without touching
- * field mapping / palettes / seat counts.
+ * Gait-averaging strategy per Sportfengur classId (flokkar_numer — globally
+ * unique across events). 'sum5' = gæðingakeppni quality class (all judges
+ * count in gait averages); null = sport convention (drop highest+lowest for
+ * 5 judges).
  *
- * @param {number} eventId
- * @param {number} competitionId - 1, 2, or 3
+ * Keyed by CLASS, not by (event, competition) slot: a multi-discipline event
+ * (Landsmót) has many classes sharing the same slot numbers, so a per-slot
+ * value would be overwritten by whichever class happens to come last in the
+ * /event/tests listing. The class being refreshed is always known (classId),
+ * so the lookup follows the data.
+ */
+const gaitAveragingByClassId = new Map();
+
+/**
+ * Record the gait-averaging strategy for a class.
+ *
+ * @param {number} classId Sportfengur flokkar_numer
  * @param {'sum5'|null} averaging
  */
-export function setEventGaitAveraging(eventId, competitionId, averaging) {
-  const id = Number(eventId);
-  if (!eventStates.has(id)) {
-    eventStates.set(id, createEmptyEventState());
-  }
-  const state = eventStates.get(id);
-  if (state.competitions[competitionId]) {
-    state.competitions[competitionId].gaitAveraging = averaging ?? null;
-  }
+export function setClassGaitAveraging(classId, averaging) {
+  const parsed = Number(classId);
+  if (!Number.isInteger(parsed) || parsed <= 0) return;
+  gaitAveragingByClassId.set(parsed, averaging ?? null);
 }
 
 /**
- * Get the stored gait-averaging strategy for a specific competition slot.
- * Returns null (sport convention) when unset or unknown.
+ * Get the gait-averaging strategy for a class. Returns null (sport
+ * convention) when unknown.
  *
- * @param {number} eventId
- * @param {number} competitionId - 1, 2, or 3
+ * @param {number} classId Sportfengur flokkar_numer
  * @returns {'sum5'|null}
  */
-export function getEventGaitAveraging(eventId, competitionId) {
-  const state = eventStates.get(Number(eventId));
-  if (!state || !state.competitions[competitionId]) {
-    return null;
-  }
-  return state.competitions[competitionId].gaitAveraging ?? null;
+export function getClassGaitAveraging(classId) {
+  return gaitAveragingByClassId.get(Number(classId)) ?? null;
 }
 
 /**
